@@ -144,6 +144,22 @@ def read_auth_token():
     return token.strip() if isinstance(token, str) else ""
 
 
+def read_claude_token():
+    """Read CLAUDE_TEST_TOKEN from .env or process environment."""
+    values = dotenv_values(str(ENV_PATH)) if ENV_PATH.is_file() else {}
+    token = values.get("CLAUDE_TEST_TOKEN") or os.environ.get("CLAUDE_TEST_TOKEN", "")
+    return token.strip() if isinstance(token, str) else ""
+
+def save_claude_token(token):
+    token = token.strip()
+    if not token:
+        raise ValueError("Claude 연결 토큰은 비워 둘 수 없습니다.")
+
+    ENV_PATH.parent.mkdir(parents=True, exist_ok=True)
+    set_key(str(ENV_PATH), "CLAUDE_TEST_TOKEN", token, quote_mode="always")
+    os.environ["CLAUDE_TEST_TOKEN"] = token
+
+
 def save_auth_token(token):
     token = token.strip()
     if not token:
@@ -416,6 +432,36 @@ def start_tunnel_and_apply_host():
     server_after = get_process_status()
     restart_result = None
     mcp_result = None
+
+    # MCP 서버가 실행 중이지 않으면 Connector가 직접 시작
+    if not server_after.get("running"):
+        restart_result = start_server()
+
+        if not restart_result.get("success"):
+            return {
+                "success": False,
+                "running": True,
+                "url": public_url,
+                "message": "Cloudflare Tunnel은 실행됐지만 MCP 서버 시작에 실패했습니다.",
+                "detail": restart_result,
+                "tunnel": tunnel_result,
+            }
+
+        for _ in range(16):
+            mcp_result = check_server_status()
+            if mcp_result.get("success"):
+                break
+            time.sleep(0.5)
+
+        if not mcp_result or not mcp_result.get("success"):
+            return {
+                "success": False,
+                "running": True,
+                "url": public_url,
+                "message": "MCP 서버를 시작했지만 로컬 연결 확인에 실패했습니다.",
+                "detail": mcp_result,
+                "tunnel": tunnel_result,
+            }
 
     if host_changed and server_after.get("running") and server_after.get("managed"):
         stopped = stop_server()
@@ -857,6 +903,7 @@ class AgentConnectorWindow(QMainWindow):
         self._active_workers = {}
         self.diagnostic_package_path = None
         self.current_token = ""
+        self.current_claude_token = ""
         self.current_tunnel_url = ""
 
         root = QWidget()
@@ -1267,6 +1314,44 @@ class AgentConnectorWindow(QMainWindow):
         self.token_status_label = QLabel("토큰 상태 확인 전")
         self.token_status_label.setObjectName("description")
         connection_layout.addRow("인증 상태", self.token_status_label)
+
+        claude_token_row = QHBoxLayout()
+        self.claude_token_edit = QLineEdit()
+        self.claude_token_edit.setReadOnly(True)
+        self.claude_token_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.claude_token_edit.setPlaceholderText(
+            "CLAUDE_TEST_TOKEN이 설정되지 않았습니다."
+        )
+        claude_token_row.addWidget(self.claude_token_edit, 1)
+
+        self.claude_token_show_button = QPushButton("전체 보기")
+        self.claude_token_copy_button = QPushButton("토큰 복사")
+        self.claude_token_generate_button = QPushButton("토큰 재발급")
+
+        for button in (
+            self.claude_token_show_button,
+            self.claude_token_copy_button,
+            self.claude_token_generate_button,
+        ):
+            button.setObjectName("secondaryButton")
+            claude_token_row.addWidget(button)
+
+        self.claude_token_show_button.clicked.connect(
+            self.toggle_claude_token_visibility
+        )
+        self.claude_token_copy_button.clicked.connect(
+            self.copy_claude_token
+        )
+        self.claude_token_generate_button.clicked.connect(
+            self.generate_claude_token
+        )
+
+        connection_layout.addRow("Claude 연결 토큰", claude_token_row)
+
+        self.claude_token_status_label = QLabel("Claude 토큰 상태 확인 전")
+        self.claude_token_status_label.setObjectName("description")
+        connection_layout.addRow("Claude 토큰 상태", self.claude_token_status_label)
+
         layout.addWidget(connection_group)
 
         note = QLabel(
@@ -1742,12 +1827,88 @@ class AgentConnectorWindow(QMainWindow):
     def refresh_token_display(self):
         self.current_token = read_auth_token()
         self.token_edit.setText(self.current_token)
+
+        self.current_claude_token = read_claude_token()
+        self.claude_token_edit.setText(self.current_claude_token)
+
+        if self.current_claude_token:
+            self.claude_token_status_label.setText(
+                "Claude 연결 토큰이 설정되어 있습니다."
+            )
+            self.claude_token_copy_button.setEnabled(True)
+        else:
+            self.claude_token_status_label.setText(
+                "Claude 연결 토큰이 없습니다."
+            )
+            self.claude_token_copy_button.setEnabled(False)
         if self.current_token:
             self.token_status_label.setText("인증 토큰이 설정되어 있습니다.")
             self.token_copy_button.setEnabled(True)
         else:
             self.token_status_label.setText("인증 토큰이 없습니다. 새 토큰을 생성해야 MCP 서버를 시작할 수 있습니다.")
             self.token_copy_button.setEnabled(False)
+
+    def toggle_claude_token_visibility(self):
+        visible = (
+            self.claude_token_edit.echoMode()
+            == QLineEdit.EchoMode.Password
+        )
+        self.claude_token_edit.setEchoMode(
+            QLineEdit.EchoMode.Normal
+            if visible else QLineEdit.EchoMode.Password
+        )
+        self.claude_token_show_button.setText(
+            "숨기기" if visible else "전체 보기"
+        )
+
+    def copy_claude_token(self):
+        token = self.current_claude_token or read_claude_token()
+        if not token:
+            QMessageBox.warning(
+                self, "토큰 없음",
+                "CLAUDE_TEST_TOKEN이 설정되어 있지 않습니다."
+            )
+            return
+
+        QApplication.clipboard().setText(token)
+        self.claude_token_status_label.setText(
+            "Claude 연결 토큰을 클립보드에 복사했습니다."
+        )
+
+    def generate_claude_token(self):
+        answer = QMessageBox.question(
+            self,
+            "Claude 연결 토큰 재발급",
+            "새 토큰을 발급하면 기존 Claude 연결 주소의 토큰은 더 이상 사용할 수 없습니다. 계속할까요?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            token = secrets.token_urlsafe(32)
+            save_claude_token(token)
+
+            self.refresh_token_display()
+            self.claude_token_edit.setEchoMode(QLineEdit.EchoMode.Normal)
+            self.claude_token_show_button.setText("숨기기")
+
+            QMessageBox.information(
+                self,
+                "Claude 토큰 재발급 완료",
+                "새 Claude 연결 토큰을 저장했습니다.\n\n"
+                "새 토큰을 적용하려면 MCP 서버를 재시작해야 합니다.\n"
+                "새 토큰이 포함된 외부 연결 주소를 사용하세요.",
+            )
+
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Claude 토큰 발급 실패",
+                str(exc),
+            )
 
     def toggle_token_visibility(self):
         visible = self.token_edit.echoMode() == QLineEdit.EchoMode.Password
