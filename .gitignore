@@ -1,0 +1,27 @@
+﻿.env
+.env.*
+!.env.example
+
+.venv/
+__pycache__/
+*.py[cod]
+
+*.backup
+server_backup*.py
+add_test_backup/
+
+tools/
+logs/
+runtime/
+
+build/
+dist/
+*.spec
+
+gui_crash.log
+gui_backend_review.zip
+
+# Backup and temporary development files
+*backup*
+*rollback*
+apply_server_host_patch.py

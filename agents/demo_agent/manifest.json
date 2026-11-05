@@ -1,0 +1,7 @@
+
+{
+    "id": "demo_agent",
+    "name": "테스트 에이전트",
+    "description": "로컬 패키지 로딩 검증용 에이전트",
+    "entrypoint": "agent.py"
+}

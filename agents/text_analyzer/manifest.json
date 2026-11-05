@@ -1,0 +1,6 @@
+{
+    "id": "text_analyzer",
+    "name": "텍스트 분석 에이전트",
+    "description": "입력된 텍스트의 글자 수와 단어 수를 분석합니다.",
+    "entrypoint": "agent.py"
+}

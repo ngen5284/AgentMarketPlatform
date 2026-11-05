@@ -1,0 +1,7 @@
+{
+  "algorithm": "sha256",
+  "files": {
+    "agent.py": "e777aab3f418e89490d125dc13d22e66531a4432113623410fd6227b203774b4",
+    "manifest.json": "9aeb7ca68791bf0d32ba4f545f01c87a9687fd594be25b523da9bd95f17164b5"
+  }
+}
