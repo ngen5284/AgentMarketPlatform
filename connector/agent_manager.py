@@ -136,7 +136,7 @@ def install_agent(source_dir: str | Path) -> dict:
     source_dir = Path(source_dir).resolve()
 
     if not source_dir.is_dir():
-        raise ValueError("??? ??? ??? ???? ????.")
+        raise ValueError("설치할 패키지 폴더가 존재하지 않습니다.")
 
     manifest = validate_package(source_dir, require_integrity=True)
     agent_id = manifest["id"]
@@ -145,7 +145,7 @@ def install_agent(source_dir: str | Path) -> dict:
     target_dir = AGENTS_DIR / agent_id
 
     if target_dir.exists():
-        raise FileExistsError(f"?? ??? ???????: {agent_id}")
+        raise FileExistsError(f"이미 설치된 에이전트입니다: {agent_id}")
 
     try:
         shutil.copytree(source_dir, target_dir)

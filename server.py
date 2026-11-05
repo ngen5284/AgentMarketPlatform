@@ -23,7 +23,7 @@ mcp = MCPServer("AgentMarketplace")
 
 
 class BearerTokenMiddleware:
-    """疫꿸퀣??Bearer ?醫뤾쿃 ?癒?뮉 Claude ???뮞??URL ?醫뤾쿃??野꺜??鍮??덈뼄."""
+    """기본 Bearer 토큰 또는 Claude 테스트용 URL 토큰을 검사합니다."""
 
     def __init__(self, app, token, claude_token):
         self.app = app
@@ -82,41 +82,41 @@ def read_manifest(manifest_path):
 
 
 def load_agent(agent_id):
-    """嚥≪뮇類??癒?뵠?袁る뱜 ???텕筌왖???븍뜄???щ빍??"""
+    """로컬 에이전트 패키지를 불러옵니다."""
 
     agent_dir = (AGENTS_DIR / agent_id).resolve()
     manifest_path = agent_dir / "manifest.json"
 
     if not agent_dir.is_relative_to(AGENTS_DIR.resolve()):
-        raise ValueError("??됱뒠??? ??? ?癒?뵠?袁る뱜 野껋럥以??낅빍??")
+        raise ValueError("유효하지 않은 에이전트 경로입니다.")
 
     if not manifest_path.is_file():
-        raise ValueError("鈺곕똻???? ??낅뮉 ?癒?뵠?袁る뱜??낅빍??")
+        raise ValueError("존재하지 않는 에이전트입니다.")
 
     manifest = read_manifest(manifest_path)
 
     if manifest.get("id") != agent_id:
-        raise ValueError("?癒?뵠?袁る뱜 ID揶쎛 ??깊뒄??? ??녿뮸??덈뼄.")
+        raise ValueError("에이전트 ID가 일치하지 않습니다.")
 
     entrypoint = Path(manifest["entrypoint"])
 
     if entrypoint.is_absolute() or ".." in entrypoint.parts:
-        raise ValueError("??롢걵????쎈뻬 ???뵬 野껋럥以??낅빍??")
+        raise ValueError("잘못된 실행 파일 경로입니다.")
 
     agent_path = (agent_dir / entrypoint).resolve()
 
     if not agent_path.is_relative_to(agent_dir):
-        raise ValueError("??됱뒠??? ??? ??쎈뻬 ???뵬 野껋럥以??낅빍??")
+        raise ValueError("유효하지 않은 실행 파일 경로입니다.")
 
     if not agent_path.is_file():
-        raise ValueError("?癒?뵠?袁る뱜 ??쎈뻬 ???뵬??筌≪뼚??????곷뮸??덈뼄.")
+        raise ValueError("에이전트 실행 파일을 찾을 수 없습니다.")
 
     spec = importlib.util.spec_from_file_location(
         f"agent_{agent_id}", agent_path
     )
 
     if spec is None or spec.loader is None:
-        raise ValueError("?癒?뵠?袁る뱜???븍뜄???????곷뮸??덈뼄.")
+        raise ValueError("에이전트를 불러올 수 없습니다.")
 
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -126,12 +126,12 @@ def load_agent(agent_id):
 
 @mcp.tool()
 def list_agents() -> str:
-    """嚥≪뮇類????쇳뒄???癒?뵠?袁る뱜 筌뤴뫖以??鈺곌퀬???몃빍??"""
+    """로컬에 설치된 에이전트 목록을 조회합니다."""
 
     agents = []
 
     if not AGENTS_DIR.exists():
-        return "??쇳뒄???癒?뵠?袁る뱜揶쎛 ??곷뮸??덈뼄."
+        return "설치된 에이전트가 없습니다."
 
     for manifest_path in sorted(AGENTS_DIR.glob("*/manifest.json")):
         try:
@@ -139,33 +139,33 @@ def list_agents() -> str:
 
             agents.append(
                 f"ID: {manifest['id']}\n"
-                f"??已? {manifest['name']}\n"
-                f"??살구: {manifest['description']}"
+                f"이름: {manifest['name']}\n"
+                f"설명: {manifest['description']}"
             )
 
         except (OSError, json.JSONDecodeError, KeyError):
             continue
 
     if not agents:
-        return "??쇳뒄???癒?뵠?袁る뱜揶쎛 ??곷뮸??덈뼄."
+        return "설치된 에이전트가 없습니다."
 
     return "\n\n".join(agents)
 
 
 def make_agent_tool(agent_id, title, description):
-    """揶쏆뮆???癒?뵠?袁る뱜??MCP ?袁㏓럡嚥????????λ땾????밴쉐??몃빍??"""
+    """개별 에이전트를 MCP 도구로 호출할 함수를 생성합니다."""
 
     def agent_tool(task: str) -> str:
         try:
             manifest, module = load_agent(agent_id)
 
             if not callable(getattr(module, "run", None)):
-                return "?癒?뵠?袁る뱜????쎈뻬 揶쎛?館釉?run ??λ땾揶쎛 ??곷뮸??덈뼄."
+                return "에이전트에 실행 가능한 run 함수가 없습니다."
 
             return str(module.run(task))
 
         except Exception as e:
-            return f"?癒?뵠?袁る뱜 ??쎈뻬 ??살첒: {e}"
+            return f"에이전트 실행 오류: {e}"
 
     agent_tool.__name__ = agent_id
     agent_tool.__doc__ = description
@@ -252,9 +252,9 @@ async def refresh_agents() -> str:
 
     if changed:
         await notify_tools_changed()
-        return "?먯씠?꾪듃 紐⑸줉??媛깆떊?섏뿀?듬땲??"
+        return "에이전트 목록이 갱신되었습니다."
 
-    return "?먯씠?꾪듃 紐⑸줉??蹂寃??ы빆???놁뒿?덈떎."
+    return "에이전트 목록에 변경 사항이 없습니다."
 
 def build_transport_security():
     """Build a strict Host/Origin allowlist for localhost and the current Quick Tunnel."""
@@ -269,10 +269,6 @@ def build_transport_security():
         for item in os.getenv("MCP_ALLOWED_HOSTS", "").split(",")
         if item.strip()
     ]
-
-    # Preserve the previously used Quick Tunnel hostname for existing setups.
-    if not configured_hosts:
-        configured_hosts = ["integral-sapphire-jamie-nil.trycloudflare.com"]
 
     for host in configured_hosts:
         if not re.fullmatch(
@@ -306,7 +302,7 @@ if __name__ == "__main__":
 
         if not token:
             raise RuntimeError(
-                ".env ???뵬??MCP_AUTH_TOKEN????쇱젟??? ??녿릭??щ빍??"
+                ".env 파일에 MCP_AUTH_TOKEN이 설정되어 있지 않습니다."
             )
 
         app = mcp.streamable_http_app(host="127.0.0.1", transport_security=build_transport_security())
@@ -323,6 +319,6 @@ if __name__ == "__main__":
         )
 
     else:
-        raise ValueError("筌왖?癒곕릭筌왖 ??낅뮉 ?袁⑸꽊 獄쎻뫗???낅빍??")
+        raise ValueError("지원하지 않는 전송 방식입니다.")
 
 

@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 import os
 
 import httpx2
@@ -19,7 +19,7 @@ async def _refresh_server_agents():
     if not token:
         return {
             "success": False,
-            "message": ".env??MCP_AUTH_TOKEN???ㅼ젙?섏뼱 ?덉? ?딆뒿?덈떎.",
+            "message": ".env에 MCP_AUTH_TOKEN이 설정되어 있지 않습니다.",
         }
 
     headers = {
@@ -60,18 +60,18 @@ async def _refresh_server_agents():
                     if result.is_error:
                         return {
                             "success": False,
-                            "message": "\n".join(messages) or "MCP ?꾧뎄 ?몄텧 ?ㅽ뙣",
+                            "message": "\n".join(messages) or "MCP 도구 호출 실패",
                         }
 
                     return {
                         "success": True,
-                        "message": "\n".join(messages) or "?먯씠?꾪듃 紐⑸줉 媛깆떊 ?붿껌 ?깃났",
+                        "message": "\n".join(messages) or "에이전트 목록 갱신 요청 성공",
                     }
 
     except Exception as exc:
         return {
             "success": False,
-            "message": f"MCP ?쒕쾭 ?곌껐 ?먮뒗 ?몄텧 ?ㅽ뙣: {type(exc).__name__}: {exc!r}",
+            "message": f"MCP 서버 연결 또는 호출 실패: {type(exc).__name__}: {exc!r}",
         }
 
 
