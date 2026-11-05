@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>My Agent Runtime - In-Browser Execution Platform</title>
+    <link rel="stylesheet" href="/src/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div>
+                <h1>⚡ My Agent Runtime</h1>
+                <p style="color: var(--text-muted); font-size: 0.95rem;">
+                    [3번 파트] 브라우저 온디바이스 에이전트 실행 & 경량 LLM 워크플로 플랫폼
+                </p>
+            </div>
+            <div id="gpuStatusBadge" class="badge">GPU 상태 확인 중...</div>
+        </header>
+
+        <!-- 상단 2열: 에이전트 로더 & 경량 LLM 엔진 -->
+        <div class="grid-3">
+            <!-- [1] & [2] 에이전트 로더 및 IndexedDB 스토리지 -->
+            <div class="card">
+                <h2>
+                    <span>📦 [1&2] 에이전트 패키지 관리 & 로더</span>
+                    <span id="storageUsageBadge" class="badge">스토리지: 0 MB</span>
+                </h2>
+
+                <!-- 외부 에이전트 드래그 & 드롭 설치 영역 -->
+                <div id="dropZone" class="drop-zone">
+                    <div class="drop-zone-icon">📥</div>
+                    <div class="drop-zone-text">
+                        <strong>에이전트 패키지 드래그 & 드롭 설치</strong><br>
+                        <span style="font-size: 0.8rem; color: var(--text-muted);">
+                            .zip 압축 파일 또는 manifest.json + agent.py 파일들을 이곳에 놓으세요
+                        </span>
+                    </div>
+                    <input type="file" id="fileInput" accept=".zip,application/json,.py,.js" multiple style="display: none;">
+                    <button type="button" id="btnSelectFiles" class="btn btn-secondary" style="font-size: 0.8rem; padding: 4px 12px;">
+                        내 PC에서 파일 선택
+                    </button>
+                </div>
+
+                <div class="form-group">
+                    <label>내장 샘플 에이전트 원클릭 설치:</label>
+                    <div class="btn-group">
+                        <button id="btnInstallTextAnalyzer" class="btn btn-secondary">text_analyzer</button>
+                        <button id="btnInstallDemoAgent" class="btn btn-secondary">demo_agent</button>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="selectAgent">실행할 에이전트 선택:</label>
+                    <select id="selectAgent">
+                        <option value="">(설치된 에이전트 없음)</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="agentInput">에이전트 작업 지시문 (Task):</label>
+                    <textarea id="agentInput" rows="2">브라우저 내 Web Worker 격리 환경에서 실행되는 텍스트 분석 테스트입니다.</textarea>
+                </div>
+
+                <div class="btn-group">
+                    <button id="btnRunSingleAgent" class="btn">에이전트 단독 실행</button>
+                    <button id="btnClearStorage" class="btn btn-danger">캐시 전체 비우기</button>
+                </div>
+
+                <div class="form-group" style="margin-top: 14px;">
+                    <label>실행 출력:</label>
+                    <div id="agentOutputBox" class="log-box" style="min-height: 70px;">대기 중...</div>
+                </div>
+            </div>
+
+            <!-- [3] WebGPU 경량 LLM 엔진 -->
+            <div class="card">
+                <h2>
+                    <span>🧠 [3] WebGPU 경량 LLM 엔진</span>
+                    <span id="llmBadge" class="badge">미로드</span>
+                </h2>
+
+                <div class="form-group">
+                    <label for="selectModel">경량 LLM 모델 선택:</label>
+                    <select id="selectModel"></select>
+                </div>
+
+                <button id="btnLoadModel" class="btn">모델 다운로드 및 초기화</button>
+
+                <div class="progress-bar">
+                    <div id="llmProgressFill" class="progress-fill"></div>
+                </div>
+                <div id="llmProgressText" style="font-size: 0.8rem; color: var(--text-muted);">
+                    모델을 선택하고 버튼을 누르면 다운로드 진행률이 표시됩니다.
+                </div>
+
+                <div class="form-group" style="margin-top: 14px;">
+                    <label for="llmPrompt">LLM 프롬프트 테스트:</label>
+                    <textarea id="llmPrompt" rows="2">브라우저 온디바이스 AI의 보안적 장점을 한 문장으로 말해줘.</textarea>
+                </div>
+
+                <button id="btnRunSingleLLM" class="btn btn-secondary">LLM 추론 실행</button>
+
+                <div class="form-group" style="margin-top: 14px;">
+                    <label>LLM 스트리밍 출력:</label>
+                    <div id="llmOutputBox" class="log-box" style="min-height: 70px;">대기 중...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- [4] 에이전트 Chaining & Human-in-the-Loop 제어 워크플로 -->
+        <div class="workflow-panel">
+            <h2>🔗 [4] 에이전트 Chaining & Human-in-the-Loop 워크플로</h2>
+            <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 14px;">
+                에이전트 ➡️ LLM ➡️ 데모 에이전트 순차 연결. <strong>2단계(LLM) 완료 후 사용자의 직접 검토 및 승인(Human-in-the-Loop)</strong>을 거쳐 3단계로 진행합니다.
+            </p>
+
+            <!-- 파이프라인 단계 시각화 -->
+            <div class="pipeline-cards">
+                <div id="pipeStep1" class="pipe-card">
+                    <div>
+                        <div style="font-size: 0.8rem; color: var(--text-muted);">Step 1 (에이전트)</div>
+                        <strong>텍스트 분석</strong>
+                    </div>
+                    <div id="pipeStep1Output" class="pipe-card-output" style="display: none;"></div>
+                </div>
+
+                <div id="pipeStep2" class="pipe-card">
+                    <div>
+                        <div style="font-size: 0.8rem; color: var(--text-muted);">Step 2 (LLM + Human-in-the-Loop)</div>
+                        <strong>LLM 요약 및 사용자 승인</strong>
+                    </div>
+                    <div id="pipeStep2Output" class="pipe-card-output" style="display: none;"></div>
+                </div>
+
+                <div id="pipeStep3" class="pipe-card">
+                    <div>
+                        <div style="font-size: 0.8rem; color: var(--text-muted);">Step 3 (에이전트)</div>
+                        <strong>최종 보고서 확정</strong>
+                    </div>
+                    <div id="pipeStep3Output" class="pipe-card-output" style="display: none;"></div>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="workflowInput">워크플로 시작 원본 텍스트:</label>
+                <textarea id="workflowInput" rows="3">클라이언트 브라우저 환경에서 직접 실행되는 인공지능 에이전트는 외부 서버로 데이터를 전송하지 않아 프라이버시가 완벽히 보장되며 서버 인프라 비용을 획기적으로 절감합니다.</textarea>
+            </div>
+
+            <div class="btn-group">
+                <button id="btnStartWorkflow" class="btn" style="padding: 12px 24px; font-size: 1rem;">
+                    🚀 Human-in-the-Loop 워크플로 실행
+                </button>
+                <button id="btnAbortWorkflow" class="btn btn-danger" style="display: none;">
+                    🛑 실행 중단
+                </button>
+            </div>
+        </div>
+
+        <!-- 통합 시스템 로그 -->
+        <div class="card">
+            <h2>🖥️ 실시간 시스템 로그</h2>
+            <div id="logConsole" class="log-box" style="min-height: 120px;"></div>
+        </div>
+    </div>
+
+    <!-- Human-in-the-Loop 승인 모달 -->
+    <div id="hitlModal" class="modal-overlay">
+        <div class="modal-content">
+            <h3>👤 [Human-in-the-Loop] 다음 단계 진행 승인 요청</h3>
+            <p style="font-size: 0.9rem; color: var(--text-muted); margin-bottom: 12px;">
+                2단계(경량 LLM)에서 생성된 데이터를 확인하고 필요시 수정한 뒤 다음 에이전트로 전달하세요:
+            </p>
+            <div class="form-group">
+                <label>생성된 데이터 (수정 가능):</label>
+                <textarea id="hitlDataInput" rows="5"></textarea>
+            </div>
+            <div class="btn-group" style="justify-content: flex-end;">
+                <button id="btnHitlReject" class="btn btn-danger">거절 및 중단</button>
+                <button id="btnHitlApprove" class="btn">승인 및 3단계 진행</button>
+            </div>
+        </div>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+</body>
+</html>
