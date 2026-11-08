@@ -46,6 +46,13 @@ class BearerTokenMiddleware:
             and secrets.compare_digest(supplied_token, self.token)
         )
 
+        x_auth_token = headers.get(b"x-auth-token", b"").decode("latin-1")
+
+        valid_x_auth_token = (
+            bool(x_auth_token)
+            and secrets.compare_digest(x_auth_token, self.token)
+        )
+
         query_string = scope.get("query_string", b"").decode("ascii", errors="ignore")
         query_params = parse_qs(query_string)
         query_token = query_params.get("access_token", [""])[0]
@@ -55,7 +62,7 @@ class BearerTokenMiddleware:
             and secrets.compare_digest(query_token, self.claude_token)
         )
 
-        if not (valid_bearer or valid_query):
+        if not (valid_bearer or valid_x_auth_token or valid_query):
             body = b'{"error":"Unauthorized"}'
 
             await send({

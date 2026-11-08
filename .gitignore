@@ -25,3 +25,15 @@ gui_backend_review.zip
 *backup*
 *rollback*
 apply_server_host_patch.py
+
+# Installer generated files
+installer/output/
+installer/*.log
+
+# Local GUI backup
+connector/gui.py.before_claude_token
+
+# Include bundled Cloudflare executable required by installer
+!tools/
+!tools/cloudflared/
+!tools/cloudflared/cloudflared.exe
