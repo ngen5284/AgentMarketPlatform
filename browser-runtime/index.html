@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agent Market Platform - 브라우저 실행 환경</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div>
+                <h1>🌐 브라우저 실행 환경 (Browser Runtime Engine)</h1>
+                <p class="subtitle">AgentMarketPlatform — 3번 개발 파트: 클라이언트 온디바이스 에이전트 & 경량 LLM 워크플로</p>
+            </div>
+            <div id="webgpuBadge" class="badge">WebGPU 상태 확인 중...</div>
+        </header>
+
+        <!-- 상단 2열 그리드: 에이전트 실행기 & 브라우저 LLM 엔진 -->
+        <div class="grid">
+            <!-- 1. 에이전트 패키지 관리 & 실행기 -->
+            <div class="card">
+                <h2>
+                    <span>📦 에이전트 패키지 & 실행기</span>
+                    <span id="agentCountBadge" class="badge">0개 로드됨</span>
+                </h2>
+                
+                <div class="form-group">
+                    <label>내장 에이전트 브라우저(IndexedDB)에 설치:</label>
+                    <div class="btn-group">
+                        <button id="btnLoadTextAnalyzer" class="btn btn-secondary">text_analyzer 설치</button>
+                        <button id="btnLoadDemoAgent" class="btn btn-secondary">demo_agent 설치</button>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="selectAgent">실행할 에이전트 선택:</label>
+                    <select id="selectAgent">
+                        <option value="">(설치된 에이전트 없음)</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="agentTaskInput">작업(Task) 입력:</label>
+                    <textarea id="agentTaskInput" placeholder="에이전트에 전달할 작업을 입력하세요...">인공지능 에이전트 마켓플레이스 플랫폼 테스트 문장입니다. 브라우저에서 안전하게 실행됩니다.</textarea>
+                </div>
+
+                <div class="btn-group">
+                    <button id="btnRunAgent" class="btn">에이전트 실행 (Pyodide WASM)</button>
+                    <button id="btnClearCache" class="btn btn-danger">저장소 비우기</button>
+                </div>
+
+                <div class="form-group" style="margin-top: 14px;">
+                    <label>실행 결과:</label>
+                    <div id="agentResultBox" class="log-box" style="min-height: 80px;">결과가 여기에 표시됩니다.</div>
+                </div>
+            </div>
+
+            <!-- 2. 경량 LLM (WebGPU / WebLLM) 엔진 -->
+            <div class="card">
+                <h2>
+                    <span>🧠 브라우저 경량 LLM 엔진</span>
+                    <span id="llmStatusBadge" class="badge">대기 중</span>
+                </h2>
+
+                <div class="form-group">
+                    <label for="selectModel">경량 모델 선택:</label>
+                    <select id="selectModel"></select>
+                </div>
+
+                <div class="btn-group">
+                    <button id="btnLoadModel" class="btn">모델 다운로드 및 로드</button>
+                </div>
+
+                <div class="progress-container">
+                    <div class="progress-bar-bg">
+                        <div id="modelProgressFill" class="progress-bar-fill"></div>
+                    </div>
+                    <div id="modelProgressText" class="progress-text">모델을 로드하면 가중치 다운로드 진행률이 표시됩니다.</div>
+                </div>
+
+                <div class="form-group" style="margin-top: 14px;">
+                    <label for="llmPromptInput">LLM 프롬프트 테스트:</label>
+                    <textarea id="llmPromptInput" placeholder="LLM에게 보낼 프롬프트를 입력하세요...">브라우저 내에서 직접 동작하는 경량 LLM의 장점을 두 줄로 요약해줘.</textarea>
+                </div>
+
+                <button id="btnRunLLM" class="btn btn-secondary">LLM 추론 실행</button>
+
+                <div class="form-group" style="margin-top: 14px;">
+                    <label>LLM 생성 결과:</label>
+                    <div id="llmResultBox" class="log-box" style="min-height: 80px;">결과가 여기에 스트리밍됩니다.</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 3. 에이전트 연결 및 순차 워크플로 파이프라인 (Orchestration) -->
+        <div class="workflow-section">
+            <h2>🔗 에이전트 연결 & 순차 워크플로 (Sequential Workflow)</h2>
+            <p class="subtitle" style="margin-bottom: 16px;">
+                에이전트 1의 분석 결과를 브라우저 경량 LLM이 해석·가공한 뒤, 에이전트 2의 입력으로 순차 전달합니다.
+            </p>
+
+            <!-- 파이프라인 시각화 -->
+            <div class="pipeline-steps">
+                <div id="stepCard1" class="step-card">
+                    <div class="step-header">
+                        <span>1단계</span>
+                        <span id="step1Status" class="badge">대기</span>
+                    </div>
+                    <div class="step-title">텍스트 분석 에이전트</div>
+                    <div class="step-desc" style="font-size: 0.8rem; color: var(--text-muted);">글자 및 단어 수 분석</div>
+                    <div id="step1Output" class="step-output-box" style="display: none;"></div>
+                </div>
+
+                <div class="step-arrow">➡️</div>
+
+                <div id="stepCard2" class="step-card">
+                    <div class="step-header">
+                        <span>2단계</span>
+                        <span id="step2Status" class="badge">대기</span>
+                    </div>
+                    <div class="step-title">온디바이스 LLM</div>
+                    <div class="step-desc" style="font-size: 0.8rem; color: var(--text-muted);">분석 데이터 요약 및 판단</div>
+                    <div id="step2Output" class="step-output-box" style="display: none;"></div>
+                </div>
+
+                <div class="step-arrow">➡️</div>
+
+                <div id="stepCard3" class="step-card">
+                    <div class="step-header">
+                        <span>3단계</span>
+                        <span id="step3Status" class="badge">대기</span>
+                    </div>
+                    <div class="step-title">데모 에이전트</div>
+                    <div class="step-desc" style="font-size: 0.8rem; color: var(--text-muted);">최종 워크플로 보고서 확정</div>
+                    <div id="step3Output" class="step-output-box" style="display: none;"></div>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="workflowInput">워크플로 시작 입력 데이터:</label>
+                <textarea id="workflowInput" rows="3">인공지능 브라우저 런타임은 외부 서버 호출 없이 WebGPU와 WebAssembly(Pyodide) 기술을 활용하여 개인정보를 브라우저 외부로 유출하지 않고 안전하게 에이전트를 수행합니다.</textarea>
+            </div>
+
+            <button id="btnRunWorkflow" class="btn" style="padding: 12px 24px; font-size: 1rem;">
+                ⚡ 순차 워크플로 파이프라인 일괄 실행
+            </button>
+        </div>
+
+        <!-- 4. 실시간 통합 시스템 로그 -->
+        <div class="card">
+            <h2>🖥️ 시스템 로그 콘솔</h2>
+            <div id="systemLog" class="log-box"></div>
+        </div>
+    </div>
+
+    <!-- 메인 어플리케이션 스크립트 (ES Module) -->
+    <script type="module" src="js/app.js"></script>
+</body>
+</html>
+

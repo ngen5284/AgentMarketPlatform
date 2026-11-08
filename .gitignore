@@ -1,4 +1,4 @@
-﻿.env
+.env
 .env.*
 !.env.example
 
@@ -16,6 +16,7 @@ runtime/
 
 build/
 dist/
+node_modules/
 *.spec
 
 gui_crash.log
