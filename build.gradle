@@ -1,0 +1,39 @@
+plugins {
+    id 'java' // Java 소스 컴파일과 테스트 등 기본 Java 빌드 작업에 사용
+    id 'org.springframework.boot' version '4.1.2' // Spring Boot 애플리케이션 실행과 패키징에 사용
+    id 'io.spring.dependency-management' version '1.1.7' // Spring Boot 기준으로 라이브러리 버전을 일관되게 관리
+}
+
+// 프로젝트 산출물을 구분하는 그룹과 현재 개발 버전
+group = 'com.agentmarket'
+version = '0.0.1-SNAPSHOT'
+
+java {
+    toolchain {
+        // 프로젝트 컴파일과 실행에 Java 21 사용
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+repositories {
+    // 프로젝트 의존성을 Maven Central 저장소에서 다운로드
+    mavenCentral()
+}
+
+dependencies {
+    implementation 'org.springframework.boot:spring-boot-starter-web' // REST API와 내장 웹 서버 구성에 사용
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa' // JPA 기반 DB 저장과 조회에 사용
+    implementation 'org.springframework.boot:spring-boot-starter-validation' // 요청 DTO의 Validation Annotation 검사에 사용
+
+    runtimeOnly 'com.mysql:mysql-connector-j' // 실행 시 Spring Boot와 MySQL 데이터베이스를 연결하는 JDBC Driver
+
+    testImplementation 'org.springframework.boot:spring-boot-starter-test' // Spring Boot 통합 테스트와 JUnit 테스트 기능에 사용
+    // Spring Boot 4에서는 MockMvc 테스트 지원이 별도 모듈로 분리되어 있다.
+    testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test' // 실제 서버 없이 HTTP API를 검증하는 MockMvc 테스트에 사용
+    testRuntimeOnly 'com.h2database:h2' // 테스트 실행 중 MySQL 대신 사용할 인메모리 데이터베이스
+}
+
+tasks.named('test') {
+    // Gradle 테스트 작업을 JUnit Platform으로 실행
+    useJUnitPlatform()
+}

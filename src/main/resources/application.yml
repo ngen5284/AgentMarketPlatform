@@ -1,0 +1,12 @@
+# 모든 실행 환경에 공통으로 적용되는 Spring Boot 기본 설정
+spring:
+  application:
+    # 애플리케이션을 식별하는 이름
+    name: agent-market-backend
+  jpa:
+    # 웹 요청 전체에서 영속성 컨텍스트를 유지하는 Open EntityManager in View 기능을 비활성화
+    open-in-view: false
+
+server:
+  # 백엔드 서버가 요청을 받을 기본 포트
+  port: 8080

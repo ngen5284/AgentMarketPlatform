@@ -1,0 +1,19 @@
+# 실제 MySQL 데이터베이스를 사용하는 개발 환경 설정
+spring:
+  datasource:
+    # DB_URL 환경변수가 없으면 로컬 agent_marketplace MySQL 데이터베이스에 연결
+    url: ${DB_URL:jdbc:mysql://localhost:3306/agent_marketplace}
+    # 환경변수를 통해 MySQL 사용자 계정을 전달하며 기본값은 root
+    username: ${DB_USERNAME:root}
+    # DB 비밀번호는 코드에 저장하지 않고 DB_PASSWORD 환경변수로 전달
+    password: ${DB_PASSWORD}
+    # MySQL 데이터베이스 연결에 사용할 JDBC Driver
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  jpa:
+    hibernate:
+      # 개발 단계에서 Entity 정의를 기준으로 DB 스키마를 자동 갱신
+      ddl-auto: update
+    properties:
+      hibernate:
+        # Hibernate가 출력하는 SQL을 읽기 쉬운 형식으로 정렬
+        format_sql: true
