@@ -45,8 +45,11 @@ Source: "..\connector\integrity.py"; DestDir: "{app}\connector"
 Source: "..\connector\mcp_client.py"; DestDir: "{app}\connector"
 Source: "..\connector\security.py"; DestDir: "{app}\connector"
 Source: "..\connector\server_manager.py"; DestDir: "{app}\connector"
+Source: "..\connector\oauth_server.py"; DestDir: "{app}\connector"
 
-Source: "..\agents\*"; DestDir: "{app}\agents"; Flags: recursesubdirs createallsubdirs
+
+
+Source: "..\agents\*"; DestDir: "{app}\agents"; Excludes: "*.pyc"; Flags: recursesubdirs createallsubdirs
 Source: "..\tools\cloudflared\cloudflared.exe"; DestDir: "{app}\tools\cloudflared"
 
 [Run]

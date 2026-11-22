@@ -13,11 +13,15 @@ from PySide6.QtCore import (
     Qt, QThread, Signal, QUrl, QPropertyAnimation, QEasingCurve, QPointF
 )
 from PySide6.QtGui import QDesktopServices, QTextCursor, QColor
+from PySide6.QtGui import QPainter, QPen, QPalette
+from PySide6.QtWidgets import QProxyStyle, QStyle
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
     QFileDialog,
     QGraphicsDropShadowEffect,
+    QCheckBox,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -169,6 +173,32 @@ def save_auth_token(token):
     os.environ["MCP_AUTH_TOKEN"] = token
 
 
+def save_oauth_public_urls(public_url):
+    """현재 Quick Tunnel 주소로 OAuth Issuer와 MCP Resource URL을 저장합니다."""
+    parsed = urlparse(public_url.strip())
+    host = (parsed.hostname or "").lower()
+
+    if parsed.scheme != "https" or not re.fullmatch(
+        r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.trycloudflare\.com",
+        host,
+    ):
+        raise ValueError("유효한 HTTPS Cloudflare Tunnel 주소가 아닙니다.")
+
+    issuer_url = f"https://{host}"
+    resource_url = f"{issuer_url}/mcp"
+
+    ENV_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+    for key, value in (
+        ("MCP_OAUTH_ISSUER_URL", issuer_url),
+        ("MCP_OAUTH_RESOURCE_URL", resource_url),
+    ):
+        set_key(str(ENV_PATH), key, value, quote_mode="always")
+        os.environ[key] = value
+
+    return issuer_url, resource_url
+
+
 def save_allowed_tunnel_host(public_url):
     """Persist only a Cloudflare Quick Tunnel hostname for the MCP host allowlist."""
     parsed = urlparse(public_url)
@@ -183,6 +213,7 @@ def save_allowed_tunnel_host(public_url):
     ENV_PATH.parent.mkdir(parents=True, exist_ok=True)
     set_key(str(ENV_PATH), "MCP_ALLOWED_HOSTS", host, quote_mode="never")
     os.environ["MCP_ALLOWED_HOSTS"] = host
+    save_oauth_public_urls(public_url)
     return host
 
 
@@ -660,6 +691,31 @@ class OperationWorker(QThread):
                 result = start_server()
             elif self.action == "stop_server":
                 result = stop_server()
+            elif self.action == "restart_server":
+                status = get_process_status()
+
+                if status.get("running") and not status.get("managed"):
+                    result = {
+                        "success": False,
+                        "message": "Connector가 관리하지 않는 MCP 서버는 자동 재시작하지 않았습니다.",
+                    }
+                elif status.get("running"):
+                    stopped = stop_server()
+
+                    if not stopped.get("success"):
+                        result = {
+                            "success": False,
+                            "message": "기존 MCP 서버 중지에 실패하여 재시작을 취소했습니다.",
+                            "detail": stopped,
+                        }
+                    else:
+                        result = start_server()
+                else:
+                    result = {
+                        "success": True,
+                        "not_running": True,
+                        "message": "MCP 서버가 실행 중이 아닙니다. 설정은 다음 시작부터 적용됩니다.",
+                    }
             elif self.action == "process_status":
                 result = get_process_status()
             elif self.action == "mcp_status":
@@ -889,6 +945,77 @@ class ExternalStopWorker(QThread):
             "tunnel": tunnel_result,
             "server": server_result,
         })
+
+
+class BlueCheckBoxStyle(QProxyStyle):
+    """파란색 체크 배경과 흰색 체크 표시를 직접 렌더링합니다."""
+
+    def pixelMetric(self, metric, option=None, widget=None):
+        if metric in (
+            QStyle.PixelMetric.PM_IndicatorWidth,
+            QStyle.PixelMetric.PM_IndicatorHeight,
+        ):
+            return 18
+
+        return super().pixelMetric(metric, option, widget)
+
+    def drawPrimitive(self, element, option, painter, widget=None):
+        if element != QStyle.PrimitiveElement.PE_IndicatorCheckBox:
+            return super().drawPrimitive(
+                element, option, painter, widget
+            )
+
+        rect = option.rect.adjusted(1, 1, -1, -1)
+
+        checked = bool(
+            option.state & QStyle.StateFlag.State_On
+        )
+        enabled = bool(
+            option.state & QStyle.StateFlag.State_Enabled
+        )
+
+        if checked:
+            fill = QColor(
+                "#2563EB" if enabled else "#93B4EC"
+            )
+            border = QColor(
+                "#2563EB" if enabled else "#93B4EC"
+            )
+        else:
+            fill = QColor("#FFFFFF")
+            border = QColor(
+                "#64748B" if enabled else "#A0A8B5"
+            )
+
+        painter.save()
+        painter.setRenderHint(
+            QPainter.RenderHint.Antialiasing, True
+        )
+
+        painter.setPen(QPen(border, 1.4))
+        painter.setBrush(fill)
+        painter.drawRoundedRect(rect, 3, 3)
+
+        if checked:
+            painter.setPen(
+                QPen(QColor("#FFFFFF"), 2.2)
+            )
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+
+            painter.drawLine(
+                rect.left() + 3,
+                rect.center().y(),
+                rect.left() + 6,
+                rect.bottom() - 4,
+            )
+            painter.drawLine(
+                rect.left() + 6,
+                rect.bottom() - 4,
+                rect.right() - 3,
+                rect.top() + 4,
+            )
+
+        painter.restore()
 
 
 class AgentConnectorWindow(QMainWindow):
@@ -1121,6 +1248,9 @@ class AgentConnectorWindow(QMainWindow):
         cards.addWidget(self.create_card("설치된 에이전트", "agents", "로컬에 등록된 패키지"))
         cards.addWidget(self.create_card("MCP 도구", "tools", "외부 AI에 제공되는 도구"))
         layout.addLayout(cards)
+        # OAuth 대시보드 요약은 빠른 실행 영역 아래에 배치합니다.
+
+
 
         start_group = QGroupBox("빠른 실행")
         start_layout = QVBoxLayout(start_group)
@@ -1135,6 +1265,43 @@ class AgentConnectorWindow(QMainWindow):
         start_layout.addWidget(QLabel("MCP 서버와 외부 접속을 순서대로 준비합니다."))
         start_layout.addWidget(self.external_stop_button)
         layout.addWidget(start_group)
+        oauth_summary_group = QGroupBox("OAuth 상태")
+        oauth_summary_layout = QHBoxLayout(oauth_summary_group)
+        oauth_summary_layout.setContentsMargins(12, 7, 12, 7)
+        oauth_summary_layout.setSpacing(12)
+
+        self.dashboard_oauth_config_label = QLabel("OAuth: 조회 전")
+        self.dashboard_oauth_runtime_label = QLabel("MCP: 조회 전")
+        self.dashboard_oauth_password_label = QLabel("로그인: 조회 전")
+        self.dashboard_oauth_issuer_status_label = QLabel("Issuer: 조회 전")
+        self.dashboard_oauth_resource_status_label = QLabel("MCP URL: 조회 전")
+
+        labels = (
+            self.dashboard_oauth_config_label,
+            self.dashboard_oauth_runtime_label,
+            self.dashboard_oauth_password_label,
+            self.dashboard_oauth_issuer_status_label,
+            self.dashboard_oauth_resource_status_label,
+        )
+
+        for label in labels:
+            label.setObjectName("description")
+            oauth_summary_layout.addWidget(label)
+
+        oauth_summary_layout.addStretch(1)
+
+        self.dashboard_oauth_settings_button = QPushButton("설정 관리")
+        self.dashboard_oauth_settings_button.setObjectName("secondaryButton")
+        self.dashboard_oauth_settings_button.clicked.connect(
+            lambda checked=False: self.change_page(2)
+        )
+
+        oauth_summary_layout.addWidget(
+            self.dashboard_oauth_settings_button
+        )
+
+        layout.addWidget(oauth_summary_group)
+        self.refresh_dashboard_oauth_status()
 
         tools_title = QLabel("등록된 MCP 도구")
         tools_title.setObjectName("sectionTitle")
@@ -1354,16 +1521,112 @@ class AgentConnectorWindow(QMainWindow):
 
         layout.addWidget(connection_group)
 
+        oauth_group = QGroupBox("로컬 OAuth 인증")
+        oauth_layout = QFormLayout(oauth_group)
+
+        self.oauth_enabled_check = QCheckBox("OAuth 인증 사용")
+        self.oauth_checkbox_style = BlueCheckBoxStyle()
+        self.oauth_enabled_check.setStyle(self.oauth_checkbox_style)
+
+        checkbox_font = self.oauth_enabled_check.font()
+        checkbox_font.setPointSize(10)
+        checkbox_font.setBold(True)
+        self.oauth_enabled_check.setFont(checkbox_font)
+
+        checkbox_palette = self.oauth_enabled_check.palette()
+        checkbox_palette.setColor(
+            QPalette.ColorRole.WindowText,
+            QColor("#26364A")
+        )
+        self.oauth_enabled_check.setPalette(checkbox_palette)
+        oauth_layout.addRow(self.oauth_enabled_check)
+
+        oauth_description = QLabel(
+            "체크하면 외부 AI 서비스에서 Connector의 브라우저 로그인 인증을 사용합니다. "
+            "해제하면 기존 Bearer 토큰 인증 방식을 사용합니다."
+        )
+        oauth_description.setObjectName("description")
+        oauth_description.setWordWrap(True)
+        oauth_layout.addRow(oauth_description)
+
+        self.oauth_issuer_edit = QLineEdit()
+        self.oauth_issuer_edit.setReadOnly(True)
+        self.oauth_issuer_edit.setPlaceholderText(
+            "Cloudflare Tunnel 실행 후 자동 설정됩니다."
+        )
+        oauth_layout.addRow("OAuth Issuer URL", self.oauth_issuer_edit)
+
+        self.oauth_resource_edit = QLineEdit()
+        self.oauth_resource_edit.setReadOnly(True)
+        self.oauth_resource_edit.setPlaceholderText(
+            "외부 MCP 주소가 표시됩니다."
+        )
+        oauth_layout.addRow("보호 대상 MCP 주소", self.oauth_resource_edit)
+
+        oauth_password_row = QHBoxLayout()
+
+        self.oauth_password_edit = QLineEdit()
+        self.oauth_password_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.oauth_password_edit.setPlaceholderText(
+            "새로 등록하거나 변경할 때 입력"
+        )
+        oauth_password_row.addWidget(self.oauth_password_edit, 1)
+
+        self.oauth_password_toggle_button = QPushButton("표시")
+        self.oauth_password_toggle_button.setObjectName("secondaryButton")
+        self.oauth_password_toggle_button.clicked.connect(
+            self.toggle_oauth_password_visibility
+        )
+        oauth_password_row.addWidget(self.oauth_password_toggle_button)
+
+        oauth_layout.addRow("Connector 접속 승인 비밀번호", oauth_password_row)
+        oauth_password_description = QLabel(
+            "OAuth를 활성화할 때 직접 정하는 Connector 전용 비밀번호입니다. "
+            "외부 AI 연결 요청 후 브라우저에 표시되는 Connector 로그인 화면에서 입력합니다. "
+            "Claude·Gemini·ChatGPT 계정 비밀번호와는 다릅니다."
+        )
+        oauth_password_description.setObjectName("description")
+        oauth_password_description.setWordWrap(True)
+        oauth_layout.addRow(oauth_password_description)
+
+
+        self.oauth_password_status_label = QLabel("비밀번호 설정 여부 확인 전")
+        self.oauth_password_status_label.setObjectName("description")
+        oauth_layout.addRow("접속 승인 비밀번호 상태", self.oauth_password_status_label)
+
+        oauth_action_row = QHBoxLayout()
+
+        self.oauth_save_button = QPushButton("OAuth 설정 저장")
+        self.oauth_save_button.setObjectName("actionButton")
+        self.oauth_save_button.clicked.connect(self.save_oauth_settings)
+
+        self.oauth_disable_button = QPushButton("OAuth 사용 중지")
+        self.oauth_disable_button.setObjectName("dangerButton")
+        self.oauth_disable_button.clicked.connect(self.disable_oauth)
+
+        oauth_action_row.addWidget(self.oauth_save_button)
+        oauth_action_row.addWidget(self.oauth_disable_button)
+        oauth_layout.addRow(oauth_action_row)
+
+        self.oauth_status_label = QLabel("OAuth 설정 확인 전")
+        self.oauth_status_label.setObjectName("description")
+        self.oauth_status_label.setWordWrap(True)
+        oauth_layout.addRow("OAuth 상태", self.oauth_status_label)
+
+        layout.addWidget(oauth_group)
+
         note = QLabel(
-            "MCP 서버와 Cloudflare Tunnel은 각각 독립적으로 실행·중지할 수 있습니다. "
-            "외부 AI 서비스에서 사용하려면 두 프로세스가 모두 실행 중이어야 합니다. "
-            "Tunnel 주소가 바뀌면 외부 접속 주소도 새 주소로 갱신됩니다."
+            "MCP 서버와 Cloudflare Tunnel은 각각 별도로 중지할 수 있습니다. "
+            "Tunnel을 시작하면 MCP 서버가 중지된 경우 자동으로 시작하며, "
+            "Tunnel 주소가 변경되면 새 주소 적용을 위해 MCP 서버를 재시작합니다. "
+            "외부 AI 서비스 연결을 유지하려면 두 프로세스가 모두 실행 중이어야 합니다."
         )
         note.setObjectName("description")
         note.setWordWrap(True)
         layout.addWidget(note)
         layout.addStretch()
         self.refresh_token_display()
+        self.refresh_oauth_settings()
         return page
 
     def create_diagnostics_page(self):
@@ -1481,6 +1744,140 @@ class AgentConnectorWindow(QMainWindow):
         worker.start()
         return True
 
+    def refresh_dashboard_oauth_status(
+        self,
+        server_running=None,
+        tunnel_running=None,
+        needs_refresh=False,
+    ):
+        """OAuth 설정 상태를 대시보드에 간결하게 표시합니다."""
+        try:
+            values = (
+                dotenv_values(str(ENV_PATH))
+                if ENV_PATH.is_file()
+                else {}
+            )
+
+            enabled = str(
+                values.get("MCP_OAUTH_ENABLED", "false")
+            ).strip().lower() in {"1", "true", "yes", "on"}
+
+            password_hash = str(
+                values.get("MCP_OAUTH_PASSWORD_HASH") or ""
+            ).strip()
+
+            issuer_url = str(
+                values.get("MCP_OAUTH_ISSUER_URL") or ""
+            ).strip()
+
+            resource_url = str(
+                values.get("MCP_OAUTH_RESOURCE_URL") or ""
+            ).strip()
+
+            self.dashboard_oauth_config_label.setText(
+                "OAuth: 활성화" if enabled else "OAuth: 비활성화"
+            )
+
+            if needs_refresh:
+                runtime_text = "MCP: 재시작 필요"
+            elif server_running is None:
+                runtime_text = "MCP: 조회 전"
+            elif server_running:
+                runtime_text = "MCP: 실행 중"
+            else:
+                runtime_text = "MCP: 중지됨"
+
+            self.dashboard_oauth_runtime_label.setText(runtime_text)
+
+            self.dashboard_oauth_password_label.setText(
+                "승인 비밀번호: 등록됨" if password_hash else "승인 비밀번호: 미등록"
+            )
+
+            issuer_status = (
+                "Issuer: 설정됨" if issuer_url else "Issuer: 미설정"
+            )
+            resource_status = (
+                "MCP URL: 설정됨" if resource_url else "MCP URL: 미설정"
+            )
+
+            if not issuer_url and tunnel_running is False:
+                issuer_status = "Issuer: Tunnel 중지"
+            if not resource_url and tunnel_running is False:
+                resource_status = "MCP URL: Tunnel 중지"
+
+            self.dashboard_oauth_issuer_status_label.setText(
+                issuer_status
+            )
+            self.dashboard_oauth_resource_status_label.setText(
+                resource_status
+            )
+
+            # 상세 설명은 화면을 차지하지 않도록 툴팁으로 제공합니다.
+            self.dashboard_oauth_config_label.setToolTip(
+                "OAuth는 외부 AI 서비스가 Connector에 로그인할 때 사용하는 인증 방식입니다."
+            )
+
+            self.dashboard_oauth_runtime_label.setToolTip(
+                "MCP 프로세스 실행 상태입니다. 프로세스 실행만으로 OAuth 적용이 확인되는 것은 아닙니다."
+            )
+
+            self.dashboard_oauth_password_label.setToolTip(
+                "사용자가 직접 정하는 Connector 접속 승인 비밀번호입니다. "
+                "외부 AI 연결 시 브라우저의 Connector 로그인 화면에서 사용하며, "
+                "Claude·Gemini·ChatGPT 계정 비밀번호와는 다릅니다. 서버 관리에서 설정합니다."
+            )
+
+            self.dashboard_oauth_issuer_status_label.setToolTip(
+                "OAuth 인증 서버의 기준 주소입니다.\n"
+                + (issuer_url if issuer_url else "아직 설정되지 않았습니다.")
+            )
+
+            self.dashboard_oauth_resource_status_label.setToolTip(
+                "외부 AI가 MCP 요청을 보내는 보호 대상 주소입니다.\n"
+                + (resource_url if resource_url else "아직 설정되지 않았습니다.")
+            )
+
+        except Exception as exc:
+            self.dashboard_oauth_config_label.setText("OAuth: 확인 실패")
+            self.dashboard_oauth_runtime_label.setText("MCP: 확인 불가")
+            self.dashboard_oauth_password_label.setText("로그인: 확인 불가")
+            self.dashboard_oauth_issuer_status_label.setText("Issuer: 확인 불가")
+            self.dashboard_oauth_resource_status_label.setText("MCP URL: 확인 불가")
+
+    def copy_dashboard_oauth_url(self, field):
+        value = field.text().strip()
+
+        if not value:
+            self.dashboard_oauth_copy_status_label.setText(
+                "복사할 URL이 설정되어 있지 않습니다."
+            )
+            return
+
+        field.selectAll()
+        field.copy()
+        field.deselect()
+
+        self.dashboard_oauth_copy_status_label.setText(
+            "URL을 클립보드에 복사했습니다."
+        )
+
+    def copy_dashboard_oauth_url(self, field):
+        value = field.text().strip()
+
+        if not value:
+            self.dashboard_oauth_copy_status_label.setText(
+                "복사할 URL이 설정되어 있지 않습니다."
+            )
+            return
+
+        field.selectAll()
+        field.copy()
+        field.deselect()
+
+        self.dashboard_oauth_copy_status_label.setText(
+            "URL을 클립보드에 복사했습니다."
+        )
+
     def refresh_dashboard(self):
         existing = self._active_workers.get("status")
         if existing is not None and existing.isRunning():
@@ -1535,22 +1932,39 @@ class AgentConnectorWindow(QMainWindow):
         agents = results.get("agents", [])
 
         server_running = bool(server.get("running"))
-        self.set_card(
-            "server",
-            "실행 중" if server_running else "중지됨",
-            server.get("message", "상태 확인 실패"),
-        )
-        self.server_status_label.setText(
-            "MCP 서버 온라인"
-            if server_running and mcp.get("success")
-            else (
-                "프로세스 실행 중 · MCP 연결 실패"
-                if server_running
-                else "MCP 서버 오프라인"
-            )
+        mcp_connection_ok = (
+            isinstance(mcp, dict) and bool(mcp.get("success"))
         )
 
+        if server_running and mcp_connection_ok:
+            server_card_value = "온라인"
+            server_card_tools = mcp.get("tools", [])
+            server_card_detail = (
+                f"MCP 연결 정상 · {len(server_card_tools)}개 도구 확인"
+                if isinstance(server_card_tools, list)
+                else "MCP 연결 정상"
+            )
+        elif server_running:
+            server_card_value = "실행 중 · 연결 실패"
+            server_card_detail = (
+                mcp.get("message", "MCP 연결 상태를 확인하지 못했습니다.")
+                if isinstance(mcp, dict)
+                else "MCP 연결 상태를 확인하지 못했습니다."
+            )
+        else:
+            server_card_value = "중지됨"
+            server_card_detail = (
+                server.get("message", "MCP 서버가 실행 중이 아닙니다.")
+                if isinstance(server, dict)
+                else "MCP 서버 상태를 확인하지 못했습니다."
+            )
+
+        self.set_card("server", server_card_value, server_card_detail)
         tunnel_running = bool(tunnel.get("running"))
+        self.refresh_dashboard_oauth_status(
+            server_running,
+            tunnel_running=tunnel_running,
+        )
         tunnel_check_ok = bool(tunnel.get("success"))
         self.set_card(
             "tunnel",
@@ -1586,6 +2000,8 @@ class AgentConnectorWindow(QMainWindow):
         self.current_tunnel_url = public_url
         self.public_url_edit.setText(public_url)
         self.server_public_url_edit.setText(public_url)
+        if hasattr(self, 'oauth_issuer_edit'):
+            self.refresh_oauth_settings()
 
         if mcp.get("success") and tunnel_running:
             self.dashboard_message.setText("로컬 MCP 연결과 Tunnel 프로세스가 실행 중입니다. 외부 호스트 허용 여부는 별도 연결 테스트가 필요합니다.")
@@ -1808,7 +2224,7 @@ class AgentConnectorWindow(QMainWindow):
             return
 
         self.mcp_result_text = json.dumps(result, ensure_ascii=False, indent=2)
-        if action in ("start_server", "stop_server", "process_status", "mcp_status", "refresh_tools"):
+        if action in ("start_server", "stop_server", "restart_server", "process_status", "mcp_status", "refresh_tools"):
             self.server_status_label.setText(result.get("message", "작업 결과를 확인할 수 없습니다."))
             self.refresh_dashboard()
 
@@ -1847,6 +2263,195 @@ class AgentConnectorWindow(QMainWindow):
         else:
             self.token_status_label.setText("인증 토큰이 없습니다. 새 토큰을 생성해야 MCP 서버를 시작할 수 있습니다.")
             self.token_copy_button.setEnabled(False)
+
+    def refresh_oauth_settings(self):
+        values = dotenv_values(str(ENV_PATH)) if ENV_PATH.is_file() else {}
+
+        enabled = str(
+            values.get("MCP_OAUTH_ENABLED", "false")
+        ).strip().lower() in {"1", "true", "yes", "on"}
+
+        password_hash = str(
+            values.get("MCP_OAUTH_PASSWORD_HASH") or ""
+        ).strip()
+
+        self.oauth_enabled_check.setChecked(enabled)
+        self.oauth_issuer_edit.setText(
+            str(values.get("MCP_OAUTH_ISSUER_URL") or "")
+        )
+        self.oauth_resource_edit.setText(
+            str(values.get("MCP_OAUTH_RESOURCE_URL") or "")
+        )
+
+        self.oauth_password_edit.clear()
+
+        self.oauth_password_status_label.setText(
+            "등록됨 · 기존 비밀번호는 보안상 표시되지 않습니다. 유지하려면 비워 두세요."
+            if password_hash
+            else "미등록 · 최초 설정 시 새 비밀번호를 입력하세요."
+        )
+
+        if enabled and password_hash:
+            self.oauth_status_label.setText(
+                "OAuth 활성화 설정됨 · 서버 재시작 후 적용 상태를 확인하세요."
+            )
+        elif enabled:
+            self.oauth_status_label.setText(
+                "OAuth가 활성화되어 있지만 로그인 비밀번호가 없습니다."
+            )
+        else:
+            self.oauth_status_label.setText(
+                "OAuth 비활성화 · 기존 인증 토큰 방식 사용 중"
+            )
+
+        self.oauth_disable_button.setEnabled(enabled)
+
+    def toggle_oauth_password_visibility(self):
+        visible = (
+            self.oauth_password_edit.echoMode()
+            == QLineEdit.EchoMode.Password
+        )
+
+        self.oauth_password_edit.setEchoMode(
+            QLineEdit.EchoMode.Normal
+            if visible else QLineEdit.EchoMode.Password
+        )
+
+        self.oauth_password_toggle_button.setText(
+            "숨기기" if visible else "표시"
+        )
+
+    def save_oauth_settings(self):
+        try:
+            enabled = self.oauth_enabled_check.isChecked()
+
+            settings = {
+                "MCP_OAUTH_ENABLED": "true" if enabled else "false",
+            }
+
+            if enabled:
+                public_url = (
+                    self.current_tunnel_url
+                    or self.server_public_url_edit.text().strip()
+                )
+
+                if not public_url:
+                    raise ValueError(
+                        "외부 MCP 주소가 없습니다. Cloudflare Tunnel을 먼저 실행하고 상태를 새로고침하세요."
+                    )
+
+                issuer_url, resource_url = save_oauth_public_urls(public_url)
+
+                values = dotenv_values(str(ENV_PATH)) if ENV_PATH.is_file() else {}
+                existing_hash = str(
+                    values.get("MCP_OAUTH_PASSWORD_HASH") or ""
+                ).strip()
+
+                password = self.oauth_password_edit.text()
+
+                if password:
+                    from connector.oauth_server import create_password_hash
+                    password_hash = create_password_hash(password)
+                elif existing_hash:
+                    password_hash = existing_hash
+                else:
+                    raise ValueError(
+                        "최초 OAuth 활성화 시 Connector 접속 승인 비밀번호를 입력해야 합니다."
+                    )
+
+                settings.update({
+                    "MCP_OAUTH_ISSUER_URL": issuer_url,
+                    "MCP_OAUTH_RESOURCE_URL": resource_url,
+                    "MCP_OAUTH_PASSWORD_HASH": password_hash,
+                })
+
+            ENV_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+            for key, value in settings.items():
+                set_key(
+                    str(ENV_PATH),
+                    key,
+                    value,
+                    quote_mode="always"
+                )
+                os.environ[key] = value
+
+            self.oauth_password_edit.clear()
+            self.refresh_oauth_settings()
+            if hasattr(self, 'dashboard_oauth_config_label'):
+                self.refresh_dashboard_oauth_status(needs_refresh=True)
+
+            self._restart_oauth_server_if_needed()
+
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                "OAuth 설정 오류",
+                f"{type(exc).__name__}: {exc}"
+            )
+
+    def disable_oauth(self):
+        if not self.oauth_enabled_check.isChecked():
+            QMessageBox.information(
+                self,
+                "OAuth 상태",
+                "OAuth가 이미 비활성화되어 있습니다."
+            )
+            return
+
+        answer = QMessageBox.question(
+            self,
+            "OAuth 사용 중지",
+            "OAuth 인증을 중지하고 기존 Bearer 인증 방식으로 되돌릴까요?\n\n"
+            "로그인 비밀번호와 OAuth 데이터는 삭제하지 않습니다.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        self.oauth_enabled_check.setChecked(False)
+        self.save_oauth_settings()
+
+    def _restart_oauth_server_if_needed(self):
+        status = get_process_status()
+
+        if not status.get("running"):
+            self.oauth_status_label.setText(
+                "설정 저장 완료 · 다음 MCP 서버 시작부터 적용됩니다."
+            )
+            return
+
+        if not status.get("managed"):
+            self.oauth_status_label.setText(
+                "설정 저장 완료 · Connector가 관리하지 않는 MCP 서버는 자동 재시작하지 않습니다."
+            )
+            QMessageBox.warning(
+                self,
+                "수동 재시작 필요",
+                "OAuth 설정은 저장됐지만 현재 MCP 서버는 Connector 관리 대상이 아닙니다. "
+                "해당 서버를 직접 재시작해야 설정이 적용됩니다."
+            )
+            return
+
+        answer = QMessageBox.question(
+            self,
+            "MCP 서버 재시작",
+            "OAuth 설정을 적용하기 위해 MCP 서버를 재시작할까요?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+
+        if answer == QMessageBox.StandardButton.Yes:
+            self.oauth_status_label.setText(
+                "OAuth 설정 적용을 위해 MCP 서버를 재시작하고 있습니다."
+            )
+            self.run_operation("restart_server")
+        else:
+            self.oauth_status_label.setText(
+                "설정 저장 완료 · MCP 서버를 직접 재시작해야 적용됩니다."
+            )
 
     def toggle_claude_token_visibility(self):
         visible = (

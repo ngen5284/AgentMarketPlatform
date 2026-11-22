@@ -10,6 +10,10 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from mcp.server import MCPServer
+from mcp.server.auth.routes import create_auth_routes
+from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions, RevocationOptions
+from pydantic import AnyHttpUrl
+from starlette.routing import Route
 from mcp.server.subscriptions import ToolsListChanged
 from mcp.server.transport_security import TransportSecuritySettings
 
@@ -19,7 +23,58 @@ AGENTS_DIR = BASE_DIR / "agents"
 
 load_dotenv(BASE_DIR / ".env")
 
-mcp = MCPServer("AgentMarketplace")
+OAUTH_SCOPE = "mcp:tools"
+MCP_OAUTH_ENABLED = os.getenv("MCP_OAUTH_ENABLED", "false").strip().lower() in {
+    "1", "true", "yes", "on"
+}
+
+oauth_provider = None
+oauth_issuer_url = None
+oauth_resource_url = None
+
+if MCP_OAUTH_ENABLED:
+    from connector.oauth_server import LocalOAuthProvider, LocalTokenVerifier
+
+    issuer_value = os.getenv("MCP_OAUTH_ISSUER_URL", "").strip()
+    resource_value = os.getenv("MCP_OAUTH_RESOURCE_URL", "").strip()
+    password_hash = os.getenv("MCP_OAUTH_PASSWORD_HASH", "").strip()
+
+    if not issuer_value or not resource_value or not password_hash:
+        raise RuntimeError(
+            "OAuth가 활성화되어 있지만 Issuer URL, Resource URL 또는 로그인 비밀번호가 설정되지 않았습니다."
+        )
+
+    oauth_issuer_url = AnyHttpUrl(issuer_value)
+    oauth_resource_url = AnyHttpUrl(resource_value)
+
+    oauth_provider = LocalOAuthProvider(
+        database_path=BASE_DIR / "runtime" / "oauth.sqlite3",
+        password_hash=password_hash,
+        issuer_url=str(oauth_issuer_url).rstrip("/"),
+        resource_url=str(oauth_resource_url).rstrip("/"),
+    )
+
+    oauth_verifier = LocalTokenVerifier(
+        provider=oauth_provider,
+        resource_url=str(oauth_resource_url).rstrip("/"),
+        mcp_token=os.getenv("MCP_AUTH_TOKEN", ""),
+        claude_token=os.getenv("CLAUDE_TEST_TOKEN", ""),
+    )
+
+    oauth_auth_settings = AuthSettings(
+        issuer_url=oauth_issuer_url,
+        resource_server_url=oauth_resource_url,
+        required_scopes=[OAUTH_SCOPE],
+        validate_token_resource=True,
+    )
+
+    mcp = MCPServer(
+        "AgentMarketplace",
+        auth=oauth_auth_settings,
+        token_verifier=oauth_verifier,
+    )
+else:
+    mcp = MCPServer("AgentMarketplace")
 
 
 class BearerTokenMiddleware:
@@ -82,6 +137,52 @@ class BearerTokenMiddleware:
             return
 
         await self.app(scope, receive, send)
+
+
+class LegacyCredentialNormalizationMiddleware:
+    """Preserve the existing x-auth-token and Claude test URL-token inputs."""
+
+    def __init__(self, app, mcp_token, claude_token):
+        self.app = app
+        self.mcp_token = mcp_token or ""
+        self.claude_token = claude_token or ""
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        headers = list(scope.get("headers", []))
+        header_map = {key.lower(): value for key, value in headers}
+
+        if b"authorization" not in header_map:
+            normalized_token = ""
+
+            x_auth_token = header_map.get(b"x-auth-token", b"").decode("latin-1")
+            if (
+                self.mcp_token
+                and x_auth_token
+                and secrets.compare_digest(x_auth_token, self.mcp_token)
+            ):
+                normalized_token = x_auth_token
+            elif self.claude_token:
+                query_string = scope.get("query_string", b"").decode(
+                    "ascii", errors="ignore"
+                )
+                query_token = parse_qs(query_string).get("access_token", [""])[0]
+                if query_token and secrets.compare_digest(
+                    query_token, self.claude_token
+                ):
+                    normalized_token = query_token
+
+            if normalized_token:
+                scope = dict(scope)
+                scope["headers"] = headers + [
+                    (b"authorization", f"Bearer {normalized_token}".encode("latin-1"))
+                ]
+
+        await self.app(scope, receive, send)
+
 
 def read_manifest(manifest_path):
     with manifest_path.open("r", encoding="utf-8-sig") as f:
@@ -296,6 +397,14 @@ def build_transport_security():
     )
 
 
+if MCP_OAUTH_ENABLED:
+    from mcp.server.auth.handlers import revoke as mcp_revoke
+
+    class CompatibleRevocationRequest(mcp_revoke.RevocationRequest):
+        client_secret: str | None = None
+
+    mcp_revoke.RevocationRequest = CompatibleRevocationRequest
+
 if __name__ == "__main__":
     import sys
 
@@ -312,8 +421,49 @@ if __name__ == "__main__":
                 ".env 파일에 MCP_AUTH_TOKEN이 설정되어 있지 않습니다."
             )
 
-        app = mcp.streamable_http_app(host="127.0.0.1", transport_security=build_transport_security())
-        app = BearerTokenMiddleware(app, token, os.getenv("CLAUDE_TEST_TOKEN", ""))
+        mcp_app = mcp.streamable_http_app(
+            host="127.0.0.1",
+            transport_security=build_transport_security(),
+        )
+
+        if MCP_OAUTH_ENABLED:
+            oauth_routes = create_auth_routes(
+                provider=oauth_provider,
+                issuer_url=oauth_issuer_url,
+                client_registration_options=ClientRegistrationOptions(
+                    enabled=True,
+                    valid_scopes=[OAUTH_SCOPE, "offline_access"],
+                    default_scopes=[OAUTH_SCOPE],
+                ),
+                revocation_options=RevocationOptions(enabled=True),
+            )
+
+            oauth_routes.extend([
+                Route(
+                    "/oauth/login",
+                    endpoint=oauth_provider.login_page,
+                    methods=["GET"],
+                ),
+                Route(
+                    "/oauth/login/callback",
+                    endpoint=oauth_provider.login_callback,
+                    methods=["POST"],
+                ),
+            ])
+
+            # Keep the original MCP Starlette app and its lifespan.
+            mcp_app.router.routes = oauth_routes + mcp_app.router.routes
+            app = LegacyCredentialNormalizationMiddleware(
+                mcp_app,
+                token,
+                os.getenv("CLAUDE_TEST_TOKEN", ""),
+            )
+        else:
+            app = BearerTokenMiddleware(
+                mcp_app,
+                token,
+                os.getenv("CLAUDE_TEST_TOKEN", ""),
+            )
 
         import uvicorn
 
