@@ -1,4 +1,4 @@
-#define MyAppName "Agent Marketplace Connector"
+﻿#define MyAppName "Agent Marketplace Connector"
 #define MyAppVersion "1.0.0"
 #define MyAppPublisher "Agent Marketplace"
 
@@ -17,10 +17,12 @@ Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 PrivilegesRequired=lowest
+ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 Uninstallable=yes
 
 [Languages]
+Name: "korean"; MessagesFile: "compiler:Languages\Korean.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
@@ -52,10 +54,76 @@ Source: "..\connector\oauth_server.py"; DestDir: "{app}\connector"
 Source: "..\agents\*"; DestDir: "{app}\agents"; Excludes: "*.pyc"; Flags: recursesubdirs createallsubdirs
 Source: "..\tools\cloudflared\cloudflared.exe"; DestDir: "{app}\tools\cloudflared"
 
-[Run]
-Filename: "{tmp}\python-3.12.10-amd64.exe"; Parameters: "/quiet InstallAllUsers=0 TargetDir=""{app}\python"" Include_launcher=0 Include_test=0 PrependPath=0"; StatusMsg: "Python 설치 중..."; Flags: waituntilterminated
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{tmp}\setup_env.ps1"" -AppDir ""{app}"""; StatusMsg: "Agent Marketplace 구성 중..."; Flags: waituntilterminated
 
 [Icons]
 Name: "{group}\Agent Marketplace Connector"; Filename: "{app}\.venv\Scripts\python.exe"; Parameters: "-m connector.gui"; WorkingDir: "{app}"
 Name: "{autodesktop}\Agent Marketplace Connector"; Filename: "{app}\.venv\Scripts\python.exe"; Parameters: "-m connector.gui"; WorkingDir: "{app}"; Tasks: desktopicon
+
+[Code]
+procedure ExecAndCheck(
+  const FileName, Params, WorkingDir, Description: String);
+var
+  ResultCode: Integer;
+begin
+  if not Exec(
+    FileName, Params, WorkingDir,
+    SW_HIDE, ewWaitUntilTerminated, ResultCode
+  ) then
+  begin
+    RaiseException(
+      Description + ' 실행에 실패했습니다.' +
+      Chr(13) + Chr(10) + 'Windows 오류 코드: ' + IntToStr(ResultCode)
+    );
+  end;
+
+  if ResultCode <> 0 then
+  begin
+    RaiseException(
+      Description + ' 작업이 실패했습니다.' +
+      Chr(13) + Chr(10) + '종료 코드: ' + IntToStr(ResultCode) +
+      Chr(13) + Chr(10) + '설치 로그: ' +
+      ExpandConstant('{app}\logs\install.log')
+    );
+  end;
+end;
+
+procedure InstallRuntime;
+var
+  AppDir: String;
+  PythonInstaller: String;
+  PowerShellExe: String;
+  SetupScript: String;
+  PowerShellParams: String;
+begin
+  AppDir := ExpandConstant('{app}');
+  PythonInstaller := ExpandConstant(
+    '{tmp}\python-3.12.10-amd64.exe'
+  );
+  SetupScript := ExpandConstant(
+    '{tmp}\setup_env.ps1'
+  );
+  PowerShellExe := ExpandConstant(
+    '{sys}\WindowsPowerShell\v1.0\powershell.exe'
+  );
+
+  PowerShellParams :=
+    '-NoProfile -ExecutionPolicy Bypass -File "' +
+    SetupScript +
+    '" -AppDir "' +
+    AppDir +
+    '" -PythonInstaller "' +
+    PythonInstaller +
+    '"';
+
+  ExecAndCheck(
+    PowerShellExe,
+    PowerShellParams,
+    AppDir,
+    'Connector 초기 환경 구성'
+  );
+end;
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+    InstallRuntime;
+end;
