@@ -4,6 +4,7 @@
  */
 
 import JSZip from "jszip";
+import { AgentValidator, AgentType } from "./agentValidator.js";
 
 export const AgentState = {
     UNLOADED: "UNLOADED",
@@ -83,9 +84,9 @@ export class AgentLoader {
     }
 
     /**
-     * 에이전트 manifest JSON 파싱 및 유효성 검사
+     * 에이전트 manifest JSON 파싱 및 1단계 구조 검사
      */
-    parseManifest(manifestInput) {
+    parseManifest(manifestInput, code = "") {
         let manifest = manifestInput;
         if (typeof manifestInput === "string") {
             try {
@@ -95,28 +96,12 @@ export class AgentLoader {
             }
         }
 
-        if (!manifest || typeof manifest !== "object") {
-            throw new Error("에이전트 매니페스트 형식이 올바르지 않습니다.");
+        const structure = AgentValidator.validateStructure(manifest, code);
+        if (!structure.valid) {
+            throw new Error(`[구조 검사 실패] ${structure.errors.join(", ")}`);
         }
 
-        const requiredFields = ["id", "name", "description"];
-        for (const field of requiredFields) {
-            if (!manifest[field] || typeof manifest[field] !== "string") {
-                throw new Error(`필수 필드가 누락되었거나 올바르지 않습니다: ${field}`);
-            }
-        }
-
-        if (!/^[A-Za-z0-9_-]+$/.test(manifest.id)) {
-            throw new Error("에이전트 ID는 영문, 숫자, 하이픈(-), 밑줄(_)만 허용됩니다.");
-        }
-
-        return {
-            id: manifest.id,
-            name: manifest.name,
-            description: manifest.description,
-            entrypoint: manifest.entrypoint || "agent.py",
-            version: manifest.version || "1.0.0"
-        };
+        return structure.normalizedManifest;
     }
 
     /**
@@ -233,11 +218,17 @@ export class AgentLoader {
     }
 
     /**
-     * 패키지 등록 및 런타임에 로드
+     * 패키지 등록 및 2단계 검증(구조 -> 보안) 후 런타임에 로드
      * @param {Object} pkg - { manifest, code, integrity }
      */
     async loadPackage(pkg) {
-        const parsedManifest = this.parseManifest(pkg.manifest);
+        // 1단계 구조 + 2단계 보안 검사 수행
+        const inspection = AgentValidator.inspect(pkg.manifest, pkg.code);
+        if (!inspection.success) {
+            throw new Error(`에이전트 패키지 검증 실패 (${inspection.stage}): ${inspection.summary}`);
+        }
+
+        const parsedManifest = inspection.structure.normalizedManifest;
         const agentId = parsedManifest.id;
 
         this.agentRegistry.set(agentId, {

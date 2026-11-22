@@ -1,108 +1,147 @@
-# [AgentMarketPlatform] 3번 파트: 브라우저 실행 런타임 연동 가이드
+# [AgentMarketPlatform] 3번 파트: 에이전트 규격·검증 및 런타임 연동 가이드
 
-> **작성자**: 3번 파트 담당자  
+> **작성자**: 3번 파트 담당자 (`Jeongkihoon`)  
 > **대상**: 1번(웹 마켓플레이스 프론트엔드), 2번(백엔드 및 에이전트 관리), 4번(로컬 MCP 서버) 조원  
-> **위치**: `my-agent-runtime/`
+> **위치**: `my-agent-runtime/`, `browser-runtime/`  
+> **최신 개정일**: 2026-11-22 (에이전트 정의 분리 및 피클 사태 보안 정책 반영)
 
 ---
 
-## 📌 3번 파트 개요
-3번 파트는 **사용자의 웹 브라우저(클라이언트) 환경에서 서버 없이 에이전트와 경량 LLM을 직접 구동하고 순차 워크플로를 처리하는 핵심 엔진**입니다.
+## 📌 3번 파트 핵심 책임 및 업데이트 요약
 
-* **에이전트 실행**: Pyodide(WASM Python) 및 Web Worker를 통한 안전한 격리 실행
-* **오프라인 캐싱**: IndexedDB 및 Cache API를 이용한 패키지 및 가중치 저장
-* **온디바이스 LLM**: WebGPU 기반 초경량 모델(SmolLM2, Qwen2.5 등) 로컬 추론
-* **워크플로 오케스트레이션**: 에이전트 체이닝 & Human-in-the-Loop(사용자 개입/승인) 파이프라인
+최근 AI 에이전트 차단 사태(코레일/항공사의 제3자 에이전트 차단) 및 팀 회의 결정에 따라 3번 파트의 역할이 다음과 같이 고도화되었습니다:
 
----
-
-## 🤝 1번 조원 (웹 마켓플레이스 프론트엔드) 연동 가이드
-
-1번 조원님은 본인이 만든 UI 화면(스토어, 워크플로 에디터 등)에서 아래처럼 3번의 모듈을 `import`하여 함수를 호출하시기만 하면 됩니다.
-
-### 1. 단일 에이전트 실행 방법
-```javascript
-import { AgentLoader } from "./src/loader/agentLoader.js";
-
-const loader = new AgentLoader();
-
-// 에이전트 실행 (에이전트ID, 작업지시문)
-const response = await loader.executeAgent("text_analyzer", "분석할 텍스트입니다.");
-console.log(response.output);      // 에이전트 실행 결과 문자열
-console.log(response.durationMs);  // 소요 시간(ms)
-```
-
-### 2. 순차 워크플로 & Human-in-the-Loop 파이프라인 구동
-```javascript
-import { WorkflowEngine } from "./src/workflow/workflowEngine.js";
-
-const workflow = new WorkflowEngine(loader, llmEngine);
-
-// 사용자 승인이 필요한 단계는 requireApproval: true 부여
-workflow.onApprovalRequired = ({ stepIndex, step, output, resolve, reject }) => {
-    // 1번 조원님의 예쁜 모달 UI를 띄워 사용자에게 output을 보여주고 승인/수정 받기
-    const userEditedData = prompt("생성된 데이터를 검토 후 수정하세요:", output);
-    if (userEditedData !== null) {
-        resolve(userEditedData); // 다음 단계로 전달
-    } else {
-        reject("사용자 거절");
-    }
-};
-
-const pipeline = [
-    { type: "agent", agentId: "text_analyzer", label: "1단계: 텍스트 분석" },
-    { type: "llm", prompt: "분석 결과를 요약해줘: {{prev}}", label: "2단계: LLM 요약", requireApproval: true },
-    { type: "agent", agentId: "demo_agent", label: "3단계: 최종 보고" }
-];
-
-const results = await workflow.run(pipeline, "시작 텍스트 데이터");
-```
+1. **에이전트 정의 분리**: 도구형 에이전트(`TOOL`)와 자율형 에이전틱 에이전트(`AGENTIC`)의 표준 입출력 및 메타데이터 규격화
+2. **2단계 업로드 검증 엔진**:
+   - `1단계 (구조 검사)`: 필수 파일, 스키마, 에이전트 유형 판별
+   - `2단계 (보안 검사)`: 악성 시스템 호출 차단 + **피클 사태 방지용 매크로/스크래핑 라이브러리(`selenium`, `playwright` 등) 차단**
+3. **다운로드 및 LLM 연동 규격**: 마켓에서 다운로드하여 사용자의 LLM(FastMCP 도구 또는 API Key 주입)에 바로 꽂아 쓸 수 있는 실행 패키지 포맷
+4. **Human-in-the-Loop (인간 승인) 게이트**: 결제, 예약 등 민감한 동작 시 사용자의 명시적 승인을 거치도록 강제하는 파이프라인 인터페이스
 
 ---
 
-## 📦 2번 조원 (백엔드 및 에이전트 관리) 연동 규격
+## 📦 1. 에이전트 유형별 표준 패키지 규격 (2번 백엔드 & 공통)
 
-2번 조원님이 에이전트 마켓플레이스 서버에서 에이전트를 배포/다운로드할 때 내려주시는 패키지 규격입니다.
+에이전트는 `manifest.json`의 `type` 필드에 따라 2가지로 명확히 구분됩니다.
 
-### 1. 에이전트 패키지 구성 (ZIP 파일 또는 JSON)
-ZIP 파일 내부에 아래 파일들이 들어있으면 브라우저 런타임이 드래그&드롭 또는 API 다운로드 시 자동 압축 해제 및 설치합니다:
-```
-my_agent.zip
-├── manifest.json   (필수)
-├── agent.py        (필수: 실행 진입점 코드)
-└── integrity.json  (선택: SHA-256 무결성 검증 해시)
-```
-
-### 2. `manifest.json` 표준 형식
+### ① 도구형 에이전트 (`TOOL`)
+LLM이 필요할 때 Function Calling으로 호출하는 단일 기능형 에이전트입니다.
 ```json
 {
   "id": "calculator",
-  "name": "수학 계산기 에이전트",
+  "name": "수학 계산기 도구",
+  "type": "TOOL",
+  "version": "1.0.0",
   "description": "사칙연산 및 수학 표현식을 계산합니다.",
   "entrypoint": "agent.py",
-  "version": "1.0.0"
+  "inputSchema": {
+    "type": "string",
+    "description": "계산할 수학 수식 문자열"
+  },
+  "outputSchema": {
+    "type": "string",
+    "description": "계산 결과"
+  },
+  "requiresConfirmation": false
 }
 ```
 
-### 3. `agent.py` 진입점 함수 표준
-```python
-def run(task: str) -> str:
-    # 전달받은 task 문자열을 처리하여 결과 문자열 반환
-    return f"작업 완료: {task}"
+### ② 에이전틱 AI 에이전트 (`AGENTIC`)
+자체 목표, 시스템 프롬프트(페르소나), 추론 루프를 가진 자율형 에이전트입니다.
+```json
+{
+  "id": "policy_risk_analyzer",
+  "name": "정책 리스크 분석관",
+  "type": "AGENTIC",
+  "version": "1.0.0",
+  "description": "자율적으로 플랫폼 이용약관 및 규제 리스크를 심층 분석합니다.",
+  "prompt": "당신은 플랫폼 정책 분석 전문 AI입니다. 입력된 기사와 약관에서 충돌 요소를 자율적으로 분석하세요.",
+  "requiredTools": ["calculator", "text_analyzer"],
+  "requiresConfirmation": true,
+  "permissions": ["network:api"]
+}
 ```
 
 ---
 
-## 🔌 4번 조원 (로컬 MCP 서버 및 커넥터)과의 호환성
-* 3번 브라우저 런타임의 에이전트 패키지 규격(`manifest.json`, `agent.py`, `integrity.json`)은 **4번 조원님의 로컬 MCP 서버 규격과 100% 동일하게 호환**됩니다.
-* 즉, 사용자가 마켓에서 내려받은 동일한 에이전트 패키지를 로컬 MCP 서버(Claude Desktop용)에서도 돌릴 수 있고, 브라우저 온디바이스에서도 무수정으로 그대로 실행할 수 있습니다.
+## 🛡️ 2. 업로드 2단계 검증 엔진 (2번 백엔드 & 1번 프론트)
+
+마켓플레이스에 에이전트를 등록하거나 클라이언트에서 로드할 때 3번의 `AgentValidator`를 통해 검증을 수행합니다.
+
+```mermaid
+flowchart LR
+    A["업로드 패키지"] --> B["1단계: 구조 검사 (Structure)"]
+    B -->|통과| C["2단계: 보안 검사 (Security & Compliance)"]
+    C -->|통과| D["마켓 등록 / 배포 승인"]
+    B -->|실패| F["업로드 반려"]
+    C -->|실패| F
+```
+
+### 1단계: 구조 검사 (Structure Validation)
+* 필수 메타데이터(`id`, `name`, `version`, `description`) 확인
+* ID 명명 규칙(`^[A-Za-z0-9_-]+$`) 준수 여부
+* 도구형(`TOOL`): `entrypoint` 존재 여부, `inputSchema`/`outputSchema` 유효성, `run(task)` 함수 구현 검사
+* 에이전틱형(`AGENTIC`): `prompt` 문자열 존재 여부, `requiredTools` 배열 유효성 검사
+
+### 2단계: 보안 검사 (Security Inspection - 기사 이슈 완벽 반영)
+* **시스템 악성 코드 차단 (Critical Block)**:
+  `eval()`, `exec()`, `compile()`, `os.system()`, `subprocess.*`, `pty.spawn()` 등 시스템 쉘 직접 조작 차단
+* **비인가 매크로/스크래핑 라이브러리 차단 (Macro Block)**:
+  * 차단 대상: `selenium`, `playwright`, `pyppeteer`, `pyautogui`, `pynput`, `keyboard`, `mouse`
+  * *사유: 코레일/항공사처럼 제3자 에이전트가 백그라운드 웹 자동화로 대리 예매를 시도하는 것은 보안 솔루션 탐지 및 서비스 차단 대상이 되므로 마켓 등록을 원천 차단함*
+* **안전 권고(Warning)**:
+  * 결제/예약/주문 등 민감 키워드가 포함되었는데 `requiresConfirmation: true`가 선언되지 않은 경우 사용자 승인 게이트 지정 권고
+
+### 검증 모듈 사용법 (JavaScript)
+```javascript
+import { AgentValidator } from "./src/loader/agentValidator.js";
+
+const inspection = AgentValidator.inspect(manifest, code);
+if (!inspection.success) {
+    console.error(`업로드 실패 (${inspection.stage}):`, inspection.summary);
+} else {
+    console.log(`검증 통과 [유형: ${inspection.structure.type}]`);
+}
+```
 
 ---
 
-## 💻 실행 및 테스트 환경
+## 🤝 3. 1번 조원 (웹 프론트엔드) 연동 가이드
+
+### ① Human-in-the-Loop (HITL) 승인 모달 연동
+에이전트가 단독으로 결제나 예약을 실행하지 못하도록, `requireApproval: true`인 단계는 사용자의 확인을 거칩니다.
+
+```javascript
+import { WorkflowEngine } from "./src/workflow/workflowEngine.js";
+
+const workflow = new WorkflowEngine(agentLoader, llmEngine);
+
+// 승인이 필요한 단계가 오면 자동으로 호출되는 콜백
+workflow.onApprovalRequired = ({ stepIndex, step, output, resolve, reject }) => {
+    // 1번 조원의 승인 팝업/모달 UI 띄우기
+    openApprovalModal({
+        title: `${step.label} 검토 요청`,
+        content: output,
+        onApprove: (editedData) => resolve(editedData || output), // 수정본 또는 원본 승인
+        onReject: () => reject("사용자 거절")                      // 파이프라인 중단
+    });
+};
+```
+
+---
+
+## 🔌 4. 4번 조원 (로컬 FastMCP 서버 및 커넥터)과의 호환성
+
+3번에서 정의한 `AgentValidator.buildDownloadPackage(manifest, code)`를 통해 생성된 `agent.json` 패키지는 4번의 FastMCP 서버와 100% 호환됩니다:
+* `TOOL` 에이전트: 4번의 `server.py`가 동적 Tool로 등록 (`@mcp.tool()`)
+* `AGENTIC` 에이전트: 시스템 프롬프트 및 도구 툴체인이 포함되어 Claude Desktop 또는 로컬 LLM에 에이전트 페르소나로 즉시 주입 가능
+
+---
+
+## 💻 테스트 및 확인
 ```powershell
+# 브라우저 실행 런타임 테스트
 cd my-agent-runtime
 npm.cmd run dev
 ```
-브라우저(`http://localhost:5173`)에서 모든 기능이 즉시 테스트 가능하도록 준비되어 있습니다. 연동 시 문의사항이 있으시면 언제든 편하게 말씀해 주세요!
-
+문의사항이나 스키마 확장이 필요하시면 언제든 3번 담당자에게 알려주세요!
