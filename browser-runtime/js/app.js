@@ -41,15 +41,18 @@ function log(msg, type = "info") {
     console.log(line);
 }
 
-// 내장 샘플 에이전트 데이터
+// 내장 샘플 에이전트 데이터 (도구형 TOOL vs 에이전틱 AGENTIC)
 const SAMPLE_AGENTS = {
     text_analyzer: {
         id: "text_analyzer",
         manifest: {
             id: "text_analyzer",
-            name: "텍스트 분석 에이전트",
-            description: "입력된 텍스트의 글자 수와 단어 수를 분석합니다.",
-            entrypoint: "agent.py"
+            name: "텍스트 분석 도구 (TOOL)",
+            description: "입력된 텍스트의 글자 수와 단어 수를 분석하는 도구형 에이전트",
+            type: "TOOL",
+            entrypoint: "agent.py",
+            inputSchema: { type: "string", description: "분석할 텍스트 문자열" },
+            outputSchema: { type: "string", description: "글자 수 및 단어 수 통계" }
         },
         code: `def run(task: str) -> str:
     char_count = len(task)
@@ -66,15 +69,37 @@ const SAMPLE_AGENTS = {
         id: "demo_agent",
         manifest: {
             id: "demo_agent",
-            name: "테스트 에이전트",
+            name: "테스트 도구 (TOOL)",
             description: "로컬 패키지 로딩 검증용 에이전트",
-            entrypoint: "agent.py"
+            type: "TOOL",
+            entrypoint: "agent.py",
+            requiresConfirmation: true
         },
         code: `def run(task: str) -> str:
     return (
-        "로컬 에이전트 실행 성공!\\n"
+        "로컬 도구 실행 성공!\\n"
         f"에이전트: 테스트 에이전트\\n"
         f"요청 내용: {task}"
+    )
+`
+    },
+    agentic_summarizer: {
+        id: "agentic_summarizer",
+        manifest: {
+            id: "agentic_summarizer",
+            name: "정책 리스크 분석관 (AGENTIC)",
+            description: "자율적으로 정책 위험과 서비스 약관을 심층 분석하는 에이전틱 AI",
+            type: "AGENTIC",
+            prompt: "당신은 플랫폼 정책 분석 전문 에이전트입니다. 기사와 규제 리스크를 분석하세요.",
+            requiredTools: ["text_analyzer"],
+            requiresConfirmation: true
+        },
+        code: `def run(task: str) -> str:
+    return (
+        "【에이전틱 심층 분석 보고서】\\n"
+        f"분석 대상: {task[:60]}...\\n"
+        "- 핵심 정책: 플랫폼 약관 및 비인가 매크로/스크래핑 차단 대응\\n"
+        "- 핵심 조치: Human-in-the-Loop(HITL) 승인 게이트 및 공식 API 표준 준수"
     )
 `
     }
@@ -272,7 +297,8 @@ btnRunWorkflow.addEventListener("click", async () => {
         {
             type: "agent",
             agentId: "demo_agent",
-            label: "3단계: 최종 보고서 확정"
+            label: "3단계: 최종 보고서 확정 (HITL 승인)",
+            requireApproval: true // [기사 사안 반영] 사람 승인 게이트
         }
     ];
 
@@ -296,6 +322,31 @@ btnRunWorkflow.addEventListener("click", async () => {
         stepCards[index].card.className = "step-card active";
         stepCards[index].status.textContent = "실행 중...";
         stepCards[index].status.className = "badge warning";
+    };
+
+    // [기사 사안 반영] Human-in-the-Loop 사용자 승인 요청 콜백
+    workflow.onApprovalRequired = ({ stepIndex, step, output, resolve, reject }) => {
+        log(`⏸️ [${step.label}] 사용자 승인 대기 중 (Human-in-the-Loop)...`);
+        stepCards[stepIndex].status.textContent = "승인 대기 중";
+        stepCards[stepIndex].status.className = "badge warning";
+        stepCards[stepIndex].out.style.display = "block";
+        stepCards[stepIndex].out.textContent = `[검토 필요 생성 데이터]\n${output}`;
+
+        // 사용자 확인 모달/컨펌
+        const confirmed = window.confirm(
+            `[Human-in-the-Loop 사용자 검토 및 승인]\n\n` +
+            `단계: ${step.label}\n\n` +
+            `내용:\n${output}\n\n` +
+            `위 결과가 안전한지 확인하셨습니까? 승인하면 다음 단계로 진행합니다.`
+        );
+
+        if (confirmed) {
+            log(`👍 [${step.label}] 사용자가 실행을 승인했습니다.`);
+            resolve(output);
+        } else {
+            log(`🚫 [${step.label}] 사용자가 거절하여 파이프라인이 중단되었습니다.`, "warn");
+            reject("사용자에 의해 중단됨");
+        }
     };
 
     workflow.onStepComplete = (index, step, res) => {
