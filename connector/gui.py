@@ -1,4 +1,5 @@
 import json
+from connector.agent_manager import install_agent, list_agents, remove_agent, validate_agent_json
 import os
 import re
 import secrets
@@ -41,7 +42,7 @@ from PySide6.QtWidgets import (
 
     QScrollArea,)
 
-from connector.agent_manager import install_agent, list_agents, remove_agent
+
 from connector.integrity import verify_package_integrity
 from connector.mcp_client import check_server_status, refresh_server_agents
 from connector.security import verify_package_security
@@ -2043,30 +2044,47 @@ class AgentConnectorWindow(QMainWindow):
         existing = self._active_workers.get("agents")
         if existing is not None and existing.isRunning():
             return
-        folder = QFileDialog.getExistingDirectory(self, "가져올 에이전트 패키지 폴더 선택")
-        if not folder:
+
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Marketplace 에이전트 파일 선택",
+            str(Path.home()),
+            "Agent JSON (*.json);;모든 파일 (*.*)",
+        )
+
+        if not file_path:
             return
-        manifest_path = Path(folder) / "manifest.json"
+
         try:
-            with manifest_path.open("r", encoding="utf-8-sig") as file:
-                manifest = json.load(file)
-            if not isinstance(manifest, dict):
-                raise ValueError("manifest.json 최상위 값은 객체여야 합니다.")
-            agent_id = manifest.get("id")
-            name = manifest.get("name", "이름 없음")
-            description = manifest.get("description", "설명 없음")
-            if not isinstance(agent_id, str) or not agent_id.strip():
-                raise ValueError("유효한 에이전트 ID가 없습니다.")
-            if not isinstance(name, str) or not isinstance(description, str):
-                raise ValueError("에이전트 이름 또는 설명 형식이 올바르지 않습니다.")
+            manifest = validate_agent_json(file_path)
+
+            if manifest["mcpSupport"] is not True:
+                raise ValueError(
+                    "이 에이전트는 Local MCP 연결을 지원하지 않습니다."
+                )
+
+            agent_id = manifest["id"]
+            name = manifest["agentName"]
+            description = manifest["description"]
+            version = manifest["version"]
+
         except Exception as exc:
-            QMessageBox.warning(self, "패키지 확인 실패", f"manifest.json을 읽을 수 없습니다.\n\n{exc}")
+            QMessageBox.warning(
+                self,
+                "에이전트 확인 실패",
+                f"agent.json을 설치할 수 없습니다.\\n\\n{exc}",
+            )
             return
 
         preview = (
-            f"이름: {name}\nID: {agent_id}\n설명: {description}\n\n경로: {folder}\n\n"
-            "가져오면 보안 및 무결성 검사를 거쳐 로컬 Connector에 등록합니다. 계속할까요?"
+            f"이름: {name}\\n"
+            f"ID: {agent_id}\\n"
+            f"버전: {version}\\n"
+            f"설명: {description}\\n\\n"
+            f"파일: {file_path}\\n\\n"
+            "이 에이전트를 로컬 Connector에 설치할까요?"
         )
+
         answer = QMessageBox.question(
             self,
             "에이전트 가져오기 확인",
@@ -2074,8 +2092,9 @@ class AgentConnectorWindow(QMainWindow):
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
+
         if answer == QMessageBox.StandardButton.Yes:
-            self.run_agent_operation("install", folder)
+            self.run_agent_operation("install", file_path)
 
     def remove_selected_agent(self):
         existing = self._active_workers.get("agents")

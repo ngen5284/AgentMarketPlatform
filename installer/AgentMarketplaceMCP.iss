@@ -1,4 +1,4 @@
-﻿#define MyAppName "Agent Marketplace Connector"
+#define MyAppName "Agent Marketplace Connector"
 #define MyAppVersion "1.0.0"
 #define MyAppPublisher "Agent Marketplace"
 
@@ -40,19 +40,13 @@ Source: "..\server.py"; DestDir: "{app}"
 Source: "..\requirements.txt"; DestDir: "{app}"
 Source: "..\.env.example"; DestDir: "{app}"; DestName: ".env.example"
 
-Source: "..\connector\agent_manager.py"; DestDir: "{app}\connector"
-Source: "..\connector\cli.py"; DestDir: "{app}\connector"
-Source: "..\connector\gui.py"; DestDir: "{app}\connector"
-Source: "..\connector\integrity.py"; DestDir: "{app}\connector"
-Source: "..\connector\mcp_client.py"; DestDir: "{app}\connector"
-Source: "..\connector\security.py"; DestDir: "{app}\connector"
-Source: "..\connector\server_manager.py"; DestDir: "{app}\connector"
-Source: "..\connector\oauth_server.py"; DestDir: "{app}\connector"
 
 
 
+Source: "..\connector\*.py"; DestDir: "{app}\connector"; Excludes: "*.backup.py,*.rollback_backup.py,*.security_backup.py"
 Source: "..\agents\*"; DestDir: "{app}\agents"; Excludes: "*.pyc"; Flags: recursesubdirs createallsubdirs
 Source: "..\tools\cloudflared\cloudflared.exe"; DestDir: "{app}\tools\cloudflared"
+
 
 
 [Icons]

@@ -1,0 +1,18 @@
+{
+    "id": "refresh_test",
+    "agentName": "갱신 테스트 에이전트",
+    "version": "1.0.0",
+    "description": "동적 도구 등록 테스트용 에이전트",
+    "prompt": "동적 도구 등록 테스트용 에이전트\n\n이 에이전트의 작업 지침입니다. 사용자가 제공한 입력값을 바탕으로 해당 작업을 수행하고, 최종 결과를 outputSchema에 정의된 형식에 맞추십시오.",
+    "inputSchema": {
+        "task": "string"
+    },
+    "outputSchema": {
+        "result": "string"
+    },
+    "requiredModel": null,
+    "requiredTools": [],
+    "browserSupport": false,
+    "mcpSupport": true,
+    "author": "anonymous"
+}
