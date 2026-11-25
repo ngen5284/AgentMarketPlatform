@@ -1,4 +1,4 @@
-﻿import ast
+import ast
 from pathlib import Path
 
 
@@ -37,6 +37,17 @@ WARNING_MODULES = {
     "pickle",
     "marshal",
     "pty",
+}
+
+BLOCKED_MODULES = {
+    "selenium",
+    "playwright",
+    "pyppeteer",
+    "pyautogui",
+    "pynput",
+    "keyboard",
+    "mouse",
+    "splinter",
 }
 
 EXCLUDED_DIRS = {
@@ -115,7 +126,14 @@ def _scan_python_file(file_path: Path, package_dir: Path) -> list[dict]:
                     alias.name
                 )
 
-                if alias.name in WARNING_MODULES:
+                if alias.name.split(".")[0] in BLOCKED_MODULES:
+                    findings.append({
+                        "severity": "block",
+                        "file": relative_path,
+                        "line": node.lineno,
+                        "reason": f"비인가 웹 매크로/스크래핑 모듈 import 차단 (피클 사태 방어): {alias.name}",
+                    })
+                elif alias.name in WARNING_MODULES:
                     findings.append({
                         "severity": "warning",
                         "file": relative_path,
@@ -132,7 +150,14 @@ def _scan_python_file(file_path: Path, package_dir: Path) -> list[dict]:
                         f"{module}.{alias.name}"
                     )
 
-            if module in WARNING_MODULES:
+            if module.split(".")[0] in BLOCKED_MODULES:
+                findings.append({
+                    "severity": "block",
+                    "file": relative_path,
+                    "line": node.lineno,
+                    "reason": f"비인가 웹 매크로/스크래핑 모듈 import 차단 (피클 사태 방어): {module}",
+                })
+            elif module in WARNING_MODULES:
                 findings.append({
                     "severity": "warning",
                     "file": relative_path,

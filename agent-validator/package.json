@@ -1,0 +1,23 @@
+{
+  "name": "agent-validator",
+  "version": "1.0.0",
+  "description": "AI Agent Marketplace - 3번 파트: 에이전트 표준 규격 및 3단계 검증 엔진",
+  "type": "module",
+  "main": "validator.js",
+  "bin": {
+    "agent-validator": "./cli.js"
+  },
+  "scripts": {
+    "test": "node test.js",
+    "validate": "node cli.js"
+  },
+  "keywords": [
+    "ai-agent",
+    "validator",
+    "mcp",
+    "agentic-ai",
+    "security"
+  ],
+  "author": "Jeongkihoon",
+  "license": "MIT"
+}

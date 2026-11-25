@@ -1,0 +1,18 @@
+{
+  "id": "policy_risk_analyzer",
+  "name": "정책 리스크 분석 에이전트",
+  "version": "1.0.0",
+  "description": "플랫폼 정책 및 외부 서비스 이용약관 위반 리스크를 자율적으로 분석하는 에이전틱 AI 에이전트",
+  "type": "AGENTIC",
+  "prompt": "당신은 플랫폼 이용약관 및 자동화 정책 분석 전문 AI입니다. 입력된 작업 내용을 바탕으로 비인가 매크로 차단 리스크와 Human-in-the-Loop 승인 필요성을 자율적으로 분석하세요.",
+  "requiredTools": [
+    "text_analyzer"
+  ],
+  "requiresConfirmation": true,
+  "permissions": [
+    "network:api"
+  ],
+  "compliance": {
+    "officialApiOnly": true
+  }
+}
